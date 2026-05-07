@@ -405,6 +405,16 @@ func (s *Substitutor) substituteOnce(template string) (string, error, int) {
 		value, err := s.resolveVar(varPath)
 		if err != nil {
 			if hasDefault {
+				// bd-wwmo9: count the default fallback as progress so the
+				// outer Substitute loop keeps recursing when the default
+				// itself contains a variable reference, e.g.
+				// ${vars.missing | ${vars.present}}. Without this the
+				// outer loop sees `resolved == 0` and exits early,
+				// returning the literal ${vars.present} instead of its
+				// resolved value.
+				if defaultVal != match {
+					resolved++
+				}
 				return defaultVal
 			}
 			if firstErr == nil {

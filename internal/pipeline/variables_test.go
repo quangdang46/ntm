@@ -503,6 +503,39 @@ func TestSubstitutor_EnvMissingDefault(t *testing.T) {
 	}
 }
 
+// bd-wwmo9: when a default fallback contains a variable reference, the
+// substitutor must recurse into it. Earlier the outer loop saw resolved == 0
+// after the fallback expanded and exited with the literal ${...} text in
+// place. Counting the default-replacement as progress lets the next pass
+// resolve the fallback.
+func TestSubstitutor_DefaultFallbackRecursesIntoVariable(t *testing.T) {
+	state := &ExecutionState{
+		Variables: map[string]interface{}{
+			"present": "ok",
+		},
+	}
+	sub := NewSubstitutor(state, "sess", "wf")
+
+	got, err := sub.Substitute(`${vars.missing | ${vars.present}}`)
+	if err != nil {
+		t.Fatalf("Substitute() error = %v", err)
+	}
+	if got != "ok" {
+		t.Fatalf("Substitute() = %q, want %q", got, "ok")
+	}
+
+	// Nested two-deep default chain — outer fallback is itself a variable
+	// whose own default is yet another variable.
+	state.Variables["fallback_target"] = "ok"
+	got, err = sub.Substitute(`${vars.missing_a | ${vars.missing_b | ${vars.fallback_target}}}`)
+	if err != nil {
+		t.Fatalf("two-deep Substitute() error = %v", err)
+	}
+	if got != "ok" {
+		t.Fatalf("two-deep Substitute() = %q, want %q", got, "ok")
+	}
+}
+
 func TestSubstitutor_LoopVars(t *testing.T) {
 	state := &ExecutionState{
 		Variables: map[string]interface{}{},
