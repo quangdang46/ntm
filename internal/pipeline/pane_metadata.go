@@ -16,6 +16,14 @@ import (
 const paneVariableKey = "pane"
 
 // PaneMetadata is the structured per-pane context exposed through ${pane.X}.
+//
+// The *FromTag flags distinguish session metadata that came from an explicit
+// tmux tag (real specified pane metadata) from session metadata derived
+// purely from pane.Type/pane.Variant (generic fallback). The roster merge
+// uses those flags to honor the bd-6lkqr.1 source-priority contract:
+// session wins where it has real specified metadata, but tag-missing fields
+// are overlaid from the structured roster sources rather than being
+// permanently masked by the generic Type/Variant fallback.
 type PaneMetadata struct {
 	PaneID                string
 	Index                 int
@@ -23,7 +31,9 @@ type PaneMetadata struct {
 	Title                 string
 	Type                  string
 	Role                  string
+	RoleFromTag           bool
 	Model                 string
+	ModelFromTag          bool
 	Domains               []string
 	ProductiveIgnorance   bool
 	ProductiveIgnoranceOK bool
@@ -131,16 +141,44 @@ func (c *PaneMetadataCache) Lookup(paneRef string) (PaneMetadata, error) {
 }
 
 func LoadPaneMetadataCache(client TmuxClient, session, projectDir string) (*PaneMetadataCache, error) {
+	var sessionEntries []PaneMetadata
 	if client != nil && session != "" {
 		entries, err := paneMetadataFromSession(client, session)
 		if err != nil {
 			return nil, err
 		}
-		if len(entries) > 0 {
-			return newPaneMetadataCache(entries), nil
-		}
+		sessionEntries = entries
 	}
 
+	rosterEntries, rosterSource, err := loadRosterFallbackEntries(projectDir)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(sessionEntries) == 0 {
+		if rosterSource == "phase0_roster" && len(rosterEntries) > 0 {
+			slog.Warn("pipeline.pane_metadata.phase0_roster_fallback",
+				"source", rosterSource,
+				"project_dir", projectDir,
+			)
+		}
+		return newPaneMetadataCache(rosterEntries), nil
+	}
+
+	if len(rosterEntries) == 0 {
+		return newPaneMetadataCache(sessionEntries), nil
+	}
+
+	merged := mergeSessionWithRoster(sessionEntries, rosterEntries)
+	return newPaneMetadataCache(merged), nil
+}
+
+// loadRosterFallbackEntries probes the documented structured roster sources
+// in priority order (RESUME.md → roster.yaml → phase0_scope_decision.md) and
+// returns the first non-empty set plus its source name. This used to be
+// inlined in LoadPaneMetadataCache but is now reused by the merge path so
+// session metadata and roster metadata can both contribute.
+func loadRosterFallbackEntries(projectDir string) ([]PaneMetadata, string, error) {
 	loaders := []struct {
 		name string
 		fn   func(string) ([]PaneMetadata, error)
@@ -152,20 +190,62 @@ func LoadPaneMetadataCache(client TmuxClient, session, projectDir string) (*Pane
 	for _, loader := range loaders {
 		entries, err := loader.fn(projectDir)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if len(entries) > 0 {
-			if loader.name == "phase0_roster" {
-				slog.Warn("pipeline.pane_metadata.phase0_roster_fallback",
-					"source", loader.name,
-					"project_dir", projectDir,
-				)
-			}
-			return newPaneMetadataCache(entries), nil
+			return entries, loader.name, nil
+		}
+	}
+	return nil, "", nil
+}
+
+// mergeSessionWithRoster overlays roster pane metadata onto the live session
+// metadata so each session pane keeps its tag-derived values but tag-missing
+// fields are filled in from the structured roster source. Implements the
+// bd-6lkqr.1 source-priority contract: session wins on real specified
+// metadata, but generic Type/Variant fallbacks no longer mask roster values.
+func mergeSessionWithRoster(session, roster []PaneMetadata) []PaneMetadata {
+	if len(roster) == 0 {
+		return session
+	}
+	rosterByID := make(map[string]PaneMetadata, len(roster))
+	rosterByIndex := make(map[int]PaneMetadata, len(roster))
+	for _, r := range roster {
+		if r.PaneID != "" {
+			rosterByID[r.PaneID] = r
+		}
+		if r.Index != 0 {
+			rosterByIndex[r.Index] = r
 		}
 	}
 
-	return newPaneMetadataCache(nil), nil
+	merged := make([]PaneMetadata, 0, len(session))
+	for _, s := range session {
+		r, ok := rosterByID[s.PaneID]
+		if !ok && s.Index != 0 {
+			r, ok = rosterByIndex[s.Index]
+		}
+		if !ok && s.NTMIndex != 0 {
+			r, ok = rosterByIndex[s.NTMIndex]
+		}
+		if ok {
+			if !s.RoleFromTag && r.Role != "" {
+				s.Role = r.Role
+			}
+			if !s.ModelFromTag && r.Model != "" {
+				s.Model = r.Model
+			}
+			if len(s.Domains) == 0 && len(r.Domains) > 0 {
+				s.Domains = append([]string(nil), r.Domains...)
+			}
+			if !s.ProductiveIgnoranceOK && r.ProductiveIgnoranceOK {
+				s.ProductiveIgnorance = r.ProductiveIgnorance
+				s.ProductiveIgnoranceOK = true
+			}
+		}
+		merged = append(merged, s)
+	}
+	return merged
 }
 
 func paneMetadataFromSession(client TmuxClient, session string) ([]PaneMetadata, error) {
@@ -181,11 +261,13 @@ func paneMetadataFromSession(client TmuxClient, session string) ([]PaneMetadata,
 }
 
 func paneMetadataFromTmuxPane(pane tmux.Pane) PaneMetadata {
-	role := tagValue(pane.Tags, "role")
+	roleTag := tagValue(pane.Tags, "role")
+	role := roleTag
 	if role == "" {
 		role = string(pane.Type)
 	}
-	model := tagValue(pane.Tags, "model")
+	modelTag := tagValue(pane.Tags, "model")
+	model := modelTag
 	if model == "" {
 		model = pane.Variant
 	}
@@ -200,7 +282,9 @@ func paneMetadataFromTmuxPane(pane tmux.Pane) PaneMetadata {
 		Title:                 pane.Title,
 		Type:                  string(pane.Type),
 		Role:                  role,
+		RoleFromTag:           roleTag != "",
 		Model:                 model,
+		ModelFromTag:          modelTag != "",
 		Domains:               tagList(pane.Tags, "domain"),
 		ProductiveIgnorance:   productive,
 		ProductiveIgnoranceOK: productiveOK,

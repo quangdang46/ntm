@@ -317,6 +317,105 @@ func TestPaneMetadataClientSatisfiesInterface(t *testing.T) {
 	var _ TmuxClient = (*countingPaneMetadataClient)(nil)
 }
 
+func TestPaneMetadataSessionMergesWithRosterForMissingFields(t *testing.T) {
+	// A live session pane without role/domain/model tags previously masked
+	// the structured roster sources entirely (LoadPaneMetadataCache returned
+	// the session-only cache as soon as GetPanes had any panes). The merge
+	// path now overlays roster fields onto session metadata so the bd-6lkqr.1
+	// source-priority contract holds: session wins on tag-derived values,
+	// roster fills tag-missing gaps.
+	dir := t.TempDir()
+	rosterDir := filepath.Join(dir, ".brenner_workspace")
+	if err := os.MkdirAll(rosterDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	writeFile(t, filepath.Join(rosterDir, "roster.yaml"), `
+panes:
+  - pane: 2
+    role: investigator
+    model: gemini-pro
+    domain: [H-001, H-005]
+    productive_ignorance: true
+`)
+
+	// Session pane has NO role/model/domain tags — only Type and Variant.
+	client := newCountingPaneMetadataClient([]tmux.Pane{
+		{ID: "%2", Index: 2, Type: tmux.AgentCodex},
+	})
+	cache, err := LoadPaneMetadataCache(client, "session", dir)
+	if err != nil {
+		t.Fatalf("LoadPaneMetadataCache() error = %v", err)
+	}
+	meta, err := cache.Lookup("%2")
+	if err != nil {
+		t.Fatalf("Lookup() error = %v", err)
+	}
+	if meta.Source != "ntm_session" {
+		t.Fatalf("Source = %q, want ntm_session (session entry stays primary)", meta.Source)
+	}
+	if meta.Role != "investigator" {
+		t.Errorf("Role = %q, want investigator (filled from roster)", meta.Role)
+	}
+	if meta.Model != "gemini-pro" {
+		t.Errorf("Model = %q, want gemini-pro (filled from roster)", meta.Model)
+	}
+	want := []string{"H-001", "H-005"}
+	if !equalStringSlices(meta.Domains, want) {
+		t.Errorf("Domains = %v, want %v (filled from roster)", meta.Domains, want)
+	}
+	if !meta.ProductiveIgnoranceOK || !meta.ProductiveIgnorance {
+		t.Errorf("ProductiveIgnorance = (%v, ok=%v), want (true, true) from roster",
+			meta.ProductiveIgnorance, meta.ProductiveIgnoranceOK)
+	}
+}
+
+func TestPaneMetadataSessionTagsWinOverRoster(t *testing.T) {
+	// When the session pane has explicit role/model/domain tags, those
+	// values must be preserved — roster only fills gaps.
+	dir := t.TempDir()
+	rosterDir := filepath.Join(dir, ".brenner_workspace")
+	if err := os.MkdirAll(rosterDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	writeFile(t, filepath.Join(rosterDir, "roster.yaml"), `
+panes:
+  - pane: 2
+    role: stale-roster-role
+    model: stale-roster-model
+    domain: [stale-domain]
+`)
+
+	client := newCountingPaneMetadataClient([]tmux.Pane{
+		{
+			ID:    "%2",
+			Index: 2,
+			Type:  tmux.AgentCodex,
+			Tags: []string{
+				"role=session-role",
+				"model=session-model",
+				"domain=session-domain",
+			},
+		},
+	})
+	cache, err := LoadPaneMetadataCache(client, "session", dir)
+	if err != nil {
+		t.Fatalf("LoadPaneMetadataCache() error = %v", err)
+	}
+	meta, err := cache.Lookup("%2")
+	if err != nil {
+		t.Fatalf("Lookup() error = %v", err)
+	}
+	if meta.Role != "session-role" {
+		t.Errorf("Role = %q, want session-role (session tag wins)", meta.Role)
+	}
+	if meta.Model != "session-model" {
+		t.Errorf("Model = %q, want session-model (session tag wins)", meta.Model)
+	}
+	if !equalStringSlices(meta.Domains, []string{"session-domain"}) {
+		t.Errorf("Domains = %v, want [session-domain]", meta.Domains)
+	}
+}
+
 func TestEnrichStrategyPanesFromRosterFillsMissingDomains(t *testing.T) {
 	// foreachStrategyPanes only consults tmux pane tags for domains. Workflows
 	// that document pane→domain ownership in roster.yaml or phase0_scope_decision.md
