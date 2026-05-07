@@ -1261,6 +1261,10 @@ const (
 	SkipKindForeachBreak     SkipKind = "foreach_loop_control_break_after"
 	SkipKindCancelled        SkipKind = "cancelled"
 	SkipKindLimit            SkipKind = "resource_limit_exceeded"
+	// SkipKindResumeAlreadyCompleted marks a foreach iteration that was
+	// fully completed in a prior run and is being skipped on resume to
+	// avoid duplicating side effects (bd-qeatk).
+	SkipKindResumeAlreadyCompleted SkipKind = "resume_already_completed"
 	// SkipKindOnFailureAction tags a step that failed but was recovered into
 	// StatusSkipped by on_failure setting a runtime variable (bd-2ytru).
 	// Distinguishes user-driven recovery from unclassified skips.

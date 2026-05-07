@@ -101,12 +101,19 @@ func (e *Executor) executeForeach(ctx context.Context, step *Step, workflow *Wor
 		return finishForeachFailure(result, "foreach", err.Error())
 	}
 
+	// bd-qeatk: register foreach state so iterations that completed in a
+	// prior run are skipped on resume instead of re-dispatching their bodies.
+	// The cursor returned by beginForeachState is advisory; the per-iteration
+	// CompletedIterationIDs set drives the skip decision below.
+	e.beginForeachState(step.ID, len(plans))
+	completedIters := e.foreachCompletedIterationIDs(step.ID)
+
 	onError := resolveErrorAction(step.OnError, workflow.Settings.OnError)
 	var iterations []foreachIterationResult
 	if config.Parallel {
-		iterations = e.executeForeachIterationsParallel(ctx, step, workflow, plans, onError, foreachMaxConcurrent(config, e.limits))
+		iterations = e.executeForeachIterationsParallel(ctx, step, workflow, plans, onError, foreachMaxConcurrent(config, e.limits), completedIters)
 	} else {
-		iterations = e.executeForeachIterationsSequential(ctx, step, workflow, plans, onError)
+		iterations = e.executeForeachIterationsSequential(ctx, step, workflow, plans, onError, completedIters)
 	}
 
 	result.ParsedData = iterations
@@ -426,7 +433,7 @@ func foreachIterationStatusLabel(result foreachIterationResult) string {
 	return "completed"
 }
 
-func (e *Executor) executeForeachIterationsSequential(ctx context.Context, parent *Step, workflow *Workflow, plans []foreachIterationPlan, onError ErrorAction) []foreachIterationResult {
+func (e *Executor) executeForeachIterationsSequential(ctx context.Context, parent *Step, workflow *Workflow, plans []foreachIterationPlan, onError ErrorAction, completedIters map[string]struct{}) []foreachIterationResult {
 	results := make([]foreachIterationResult, 0, len(plans))
 	progress := newForeachProgressTracker(e, workflow, parent, len(plans))
 	for i, plan := range plans {
@@ -435,9 +442,19 @@ func (e *Executor) executeForeachIterationsSequential(ctx context.Context, paren
 			progress.iterationFinished()
 			continue
 		}
+		// bd-qeatk: a prior run already completed this iteration; skip
+		// re-dispatch so commands/prompts don't duplicate side effects.
+		if _, done := completedIters[loopIterationID(parent.ID, plan.Index)]; done {
+			results = append(results, resumeCompletedForeachIteration(plan))
+			progress.iterationFinished()
+			continue
+		}
 		iterResult := e.executeForeachIteration(ctx, parent, workflow, plan, onError)
 		results = append(results, iterResult)
 		progress.iterationFinished()
+		if !iterResult.failed() && iterResult.Control != LoopControlBreak {
+			e.markForeachIterationCompleted(parent.ID, plan.Index, len(plans))
+		}
 		if iterResult.Control == LoopControlBreak {
 			for _, remaining := range plans[i+1:] {
 				results = append(results, foreachBreakSkippedIteration(remaining))
@@ -457,7 +474,7 @@ func (e *Executor) executeForeachIterationsSequential(ctx context.Context, paren
 	return results
 }
 
-func (e *Executor) executeForeachIterationsParallel(ctx context.Context, parent *Step, workflow *Workflow, plans []foreachIterationPlan, onError ErrorAction, maxConcurrent int) []foreachIterationResult {
+func (e *Executor) executeForeachIterationsParallel(ctx context.Context, parent *Step, workflow *Workflow, plans []foreachIterationPlan, onError ErrorAction, maxConcurrent int, completedIters map[string]struct{}) []foreachIterationResult {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
 	}
@@ -489,6 +506,12 @@ func (e *Executor) executeForeachIterationsParallel(ctx context.Context, parent 
 			progress.iterationFinished()
 			continue
 		}
+		// bd-qeatk: prior-run completion suppresses re-dispatch on resume.
+		if _, done := completedIters[loopIterationID(parent.ID, plan.Index)]; done {
+			results[i] = resumeCompletedForeachIteration(plan)
+			progress.iterationFinished()
+			continue
+		}
 		wg.Add(1)
 		go func(i int, plan foreachIterationPlan) {
 			defer wg.Done()
@@ -511,6 +534,9 @@ func (e *Executor) executeForeachIterationsParallel(ctx context.Context, parent 
 				iterResult.Error = ""
 			}
 			results[i] = iterResult
+			if !iterResult.failed() && iterResult.Control != LoopControlBreak {
+				e.markForeachIterationCompleted(parent.ID, plan.Index, len(plans))
+			}
 			if iterResult.Control == LoopControlBreak {
 				markBreak()
 				return
@@ -1355,6 +1381,40 @@ func foreachBreakSkippedIteration(plan foreachIterationPlan) foreachIterationRes
 		SkipReason: "loop break",
 		SkipKind:   SkipKindForeachBreak,
 	}
+}
+
+// resumeCompletedForeachIteration represents a foreach iteration whose body
+// fully completed in a prior run. On resume the dispatch is suppressed so
+// nested side-effects (commands, prompts) do not duplicate (bd-qeatk).
+func resumeCompletedForeachIteration(plan foreachIterationPlan) foreachIterationResult {
+	return foreachIterationResult{
+		Index:      plan.Index,
+		Item:       plan.Item,
+		Pane:       cloneInterfaceMap(plan.PaneVars),
+		Skipped:    true,
+		SkipReason: "iteration completed in prior run; suppressed on resume",
+		SkipKind:   SkipKindResumeAlreadyCompleted,
+	}
+}
+
+// foreachCompletedIterationIDs returns the durable set of iteration IDs that
+// completed in a prior run for the given foreach step. Used to suppress
+// re-dispatch of those iterations on resume.
+func (e *Executor) foreachCompletedIterationIDs(stepID string) map[string]struct{} {
+	e.stateMu.RLock()
+	defer e.stateMu.RUnlock()
+	if e.state == nil || e.state.ForeachState == nil {
+		return nil
+	}
+	st, ok := e.state.ForeachState[stepID]
+	if !ok || len(st.CompletedIterationIDs) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(st.CompletedIterationIDs))
+	for _, id := range st.CompletedIterationIDs {
+		out[id] = struct{}{}
+	}
+	return out
 }
 
 func foreachIterationCancelled(result foreachIterationResult) bool {

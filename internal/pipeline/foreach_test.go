@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -1099,5 +1100,84 @@ func TestExecuteForeachPaneFilterByRoleIncludesOnlyMatchingPanes(t *testing.T) {
 	}
 	if got, want := strings.Join(dispatched, ","), "%1,%3"; got != want {
 		t.Fatalf("dispatched outputs = %q, want %q", got, want)
+	}
+}
+
+// TestExecuteForeach_ResumeSkipsCompletedIterations covers bd-qeatk:
+// when a prior run completed some iterations and persisted their IDs in
+// ForeachState.CompletedIterationIDs, the resumed executor must NOT
+// re-dispatch those iterations — duplicating side effects (re-running
+// commands, re-prompting agents) violates the resume contract that the
+// foreach progress bookkeeping was added to enforce.
+func TestExecuteForeach_ResumeSkipsCompletedIterations(t *testing.T) {
+	tmpDir := t.TempDir()
+	counterPath := tmpDir + "/iter-runs.txt"
+
+	workflow := &Workflow{
+		SchemaVersion: SchemaVersion,
+		Name:          "foreach-resume",
+		Settings:      DefaultWorkflowSettings(),
+	}
+	step := &Step{
+		ID: "fanout",
+		Foreach: &ForeachConfig{
+			Items: `["a","b","c"]`,
+			Steps: []Step{{
+				ID:      "echo",
+				Command: `printf '%s\n' '${item}' >> ` + counterPath,
+			}},
+		},
+	}
+	workflow.Steps = []Step{*step}
+	e := createForeachTestExecutor(t, workflow)
+
+	// Simulate a prior run that completed iter0 — its iteration ID is in
+	// CompletedIterationIDs and the body command must not run again.
+	e.state.ForeachState = map[string]ForeachIterationState{
+		"fanout": {
+			StepID:                "fanout",
+			Total:                 3,
+			CompletedIterationIDs: []string{loopIterationID("fanout", 0)},
+			CurrentIteration:      1,
+		},
+	}
+
+	result := e.executeStepOnce(context.Background(), step, workflow)
+	if result.Status != StatusCompleted {
+		t.Fatalf("foreach status = %s, error = %#v", result.Status, result.Error)
+	}
+
+	iterations := foreachIterationsFromResult(t, result)
+	if len(iterations) != 3 {
+		t.Fatalf("iterations = %d, want 3", len(iterations))
+	}
+	if iterations[0].SkipKind != SkipKindResumeAlreadyCompleted {
+		t.Fatalf("iter0 SkipKind = %q, want %q (resume must skip prior-completed iter)", iterations[0].SkipKind, SkipKindResumeAlreadyCompleted)
+	}
+	for i := 1; i < 3; i++ {
+		if iterations[i].Skipped {
+			t.Fatalf("iter%d unexpectedly skipped (SkipKind=%q); only iter0 should be resume-skipped", i, iterations[i].SkipKind)
+		}
+	}
+
+	// The body command must have run exactly twice — once each for items b and c.
+	body, err := os.ReadFile(counterPath)
+	if err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("counter recorded %d body runs (%v); want exactly 2 (iter1, iter2 — never iter0)", len(lines), lines)
+	}
+	for _, ln := range lines {
+		if ln == "a" {
+			t.Fatalf("counter contains 'a' from iter0 — the prior-completed iteration was re-dispatched (lines=%v)", lines)
+		}
+	}
+
+	// ForeachState now records all three iterations as completed.
+	st := e.state.ForeachState["fanout"]
+	if len(st.CompletedIterationIDs) != 3 {
+		t.Fatalf("CompletedIterationIDs = %v, want 3 entries after the resumed run", st.CompletedIterationIDs)
 	}
 }
