@@ -702,3 +702,94 @@ func TestOnFailureActionNotSetOnSuccessSkipsRuntimeGuardedStep(t *testing.T) {
 		t.Fatalf("use_fallback status = %s, want skipped", result.Status)
 	}
 }
+
+// TestOnFailureActionFiresInsideBranchBody covers bd-afwly: a failed step
+// inside a branch body with on_failure: fallback_to_ntm_inbox must set
+// the runtime variable and convert to StatusSkipped, matching the
+// top-level executeStep tail. Without the fix the body step kept its
+// StatusFailed and downstream when: guards never saw the runtime var.
+func TestOnFailureActionFiresInsideBranchBody(t *testing.T) {
+	executor := NewExecutor(DefaultExecutorConfig("branch-failure-session"))
+
+	workflow := &Workflow{
+		SchemaVersion: SchemaVersion,
+		Name:          "branch-onfailure-action-workflow",
+		Settings:      DefaultWorkflowSettings(),
+		Steps: []Step{
+			{
+				ID:     "router",
+				Branch: "primary",
+				Branches: map[string]interface{}{
+					"primary": map[string]interface{}{
+						"id":         "register_mail",
+						"command":    "exit 4",
+						"on_failure": "fallback_to_ntm_inbox",
+					},
+				},
+			},
+		},
+	}
+
+	state, err := executor.Run(context.Background(), workflow, nil, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil after handled on_failure action", err)
+	}
+
+	register := state.Steps["register_mail"]
+	if register.Status != StatusSkipped {
+		t.Fatalf("register_mail status = %s, want skipped (on_failure handled inside branch body)", register.Status)
+	}
+	if register.SkipKind != SkipKindOnFailureAction {
+		t.Fatalf("register_mail SkipKind = %q, want %q", register.SkipKind, SkipKindOnFailureAction)
+	}
+	if got := state.Variables["runtime.register_mail_failure_action"]; got != "fallback_to_ntm_inbox" {
+		t.Fatalf("runtime failure action = %v, want fallback_to_ntm_inbox", got)
+	}
+}
+
+// TestOnFailureActionFiresInsideParallelChild covers bd-afwly: same
+// contract for a parallel substep. Previously executeParallelStep
+// returned the failed StepResult directly and skipped the on_failure
+// tail entirely. Mock tmux gives us a real pane so dispatch reaches
+// the retry loop and the prompt-resolution failure exercises the new
+// tail.
+func TestOnFailureActionFiresInsideParallelChild(t *testing.T) {
+	mock := NewMockTmuxClient(tmux.Pane{ID: "%1", Index: 1, Type: tmux.AgentCodex})
+
+	executor := NewExecutor(DefaultExecutorConfig("parallel-failure-session"))
+	executor.SetTmuxClient(mock)
+
+	workflow := &Workflow{
+		SchemaVersion: SchemaVersion,
+		Name:          "parallel-onfailure-action-workflow",
+		Settings: WorkflowSettings{
+			OnError: ErrorActionContinue,
+		},
+		Steps: []Step{
+			{
+				ID: "fanout",
+				Parallel: ParallelSpec{Steps: []Step{
+					{
+						ID:         "register_mail",
+						Pane:       PaneSpec{Index: 1},
+						PromptFile: "/this/path/does/not/exist.txt",
+						OnFailure:  OnFailureSpec{Action: "fallback_to_ntm_inbox"},
+					},
+				}},
+			},
+		},
+	}
+
+	state, _ := executor.Run(context.Background(), workflow, nil, nil)
+
+	register := state.Steps["register_mail"]
+	if register.Status != StatusSkipped {
+		t.Fatalf("register_mail status = %s, want skipped (on_failure handled inside parallel group); error=%+v", register.Status, register.Error)
+	}
+	if register.SkipKind != SkipKindOnFailureAction {
+		t.Fatalf("register_mail SkipKind = %q, want %q", register.SkipKind, SkipKindOnFailureAction)
+	}
+	if got := state.Variables["runtime.register_mail_failure_action"]; got != "fallback_to_ntm_inbox" {
+		t.Fatalf("runtime failure action = %v, want fallback_to_ntm_inbox", got)
+	}
+}

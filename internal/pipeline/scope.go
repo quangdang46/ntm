@@ -1,5 +1,7 @@
 package pipeline
 
+import "strings"
+
 type scopedValue struct {
 	value  interface{}
 	exists bool
@@ -88,4 +90,53 @@ func restoreAllVariables(state *ExecutionState, snapshot map[string]interface{})
 		return
 	}
 	state.Variables = captureAllVariables(snapshot)
+}
+
+// extractRuntimeKeys returns a copy of every "runtime.*" entry plus the
+// nested "runtime" map (if any) in vars. Used so branch / scoped blocks
+// can persist on_failure runtime-action signals across a snapshot
+// restore (bd-afwly).
+func extractRuntimeKeys(vars map[string]interface{}) map[string]interface{} {
+	if len(vars) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{})
+	for k, v := range vars {
+		if k == "runtime" || strings.HasPrefix(k, "runtime.") {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// mergeRuntimeKeys writes runtime.* entries from extra into state.Variables,
+// preserving any existing nested "runtime" map by merging child keys.
+func mergeRuntimeKeys(state *ExecutionState, extra map[string]interface{}) {
+	if state == nil || len(extra) == 0 {
+		return
+	}
+	if state.Variables == nil {
+		state.Variables = make(map[string]interface{})
+	}
+	for k, v := range extra {
+		if k == "runtime" {
+			incoming, _ := v.(map[string]interface{})
+			if incoming == nil {
+				continue
+			}
+			existing, _ := state.Variables["runtime"].(map[string]interface{})
+			if existing == nil {
+				existing = make(map[string]interface{})
+				state.Variables["runtime"] = existing
+			}
+			for ck, cv := range incoming {
+				existing[ck] = cv
+			}
+			continue
+		}
+		state.Variables[k] = v
+	}
 }

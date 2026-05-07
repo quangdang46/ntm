@@ -2164,7 +2164,18 @@ func (e *Executor) executeParallelStep(ctx context.Context, step *Step, workflow
 		}
 	}
 
-	// Failed after all attempts
+	// Failed after all attempts. Mirror the top-level executeStep tail so a
+	// parallel child step honors the on_failure runtime-action contract
+	// (bd-afwly): a custom action sets ${runtime.<id>_failure_action},
+	// converts the failure to StatusSkipped, and emits the on_failure
+	// event. Recovery (on_failure.steps) also applies.
+	if result.Status == StatusFailed {
+		result = e.executeOnFailureAction(step, result)
+		if result.Status == StatusSkipped {
+			return result
+		}
+		result = e.executeOnFailureRecovery(ctx, step, workflow, result)
+	}
 	return result
 }
 

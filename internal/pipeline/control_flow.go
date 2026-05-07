@@ -166,13 +166,19 @@ func (e *Executor) executeBranch(ctx context.Context, step *Step, workflow *Work
 		return result
 	}
 
-	// Snapshot variables before branch body for scoping.
+	// Snapshot variables before branch body for scoping. The deferred
+	// restore reapplies the snapshot, but bd-afwly's on_failure runtime
+	// action contract requires ${runtime.<id>_failure_action} keys set
+	// inside the body to survive — they are global signaling, not branch-
+	// local data. Stash and re-merge them after the restore.
 	e.varMu.RLock()
 	varSnapshot := captureAllVariables(e.state.Variables)
 	e.varMu.RUnlock()
 	defer func() {
 		e.varMu.Lock()
+		runtimePersist := extractRuntimeKeys(e.state.Variables)
 		restoreAllVariables(e.state, varSnapshot)
+		mergeRuntimeKeys(e.state, runtimePersist)
 		e.varMu.Unlock()
 	}()
 
@@ -197,6 +203,17 @@ func (e *Executor) executeBranch(ctx context.Context, step *Step, workflow *Work
 		)
 
 		sr := e.executeStepOnce(ctx, &bs, workflow)
+
+		// bd-afwly: branch body steps now honor the on_failure runtime
+		// action / recovery contract used by top-level executeStep, so
+		// fallback_to_ntm_inbox / suppress_failure work the same inside
+		// a branch as outside it.
+		if sr.Status == StatusFailed {
+			sr = e.executeOnFailureAction(&bs, sr)
+			if sr.Status == StatusFailed {
+				sr = e.executeOnFailureRecovery(ctx, &bs, workflow, sr)
+			}
+		}
 		outputs = append(outputs, sr.Output)
 
 		e.stateMu.Lock()
