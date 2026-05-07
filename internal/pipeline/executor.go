@@ -2541,6 +2541,12 @@ func (e *Executor) applyResumeState() {
 	}
 
 	var rerunStepIDs []string
+	// bd-gtb5p: orphan step IDs (those that fail graph.MarkExecuted because
+	// the workflow definition no longer contains them) must also have their
+	// flat steps.<id>.output / steps.<id>.data variables purged. Otherwise
+	// downstream prompts/conditions can resolve through ghost outputs from
+	// steps that aren't even in the dependency graph any more.
+	var orphanStepIDs []string
 
 	e.stateMu.Lock()
 	if e.state == nil {
@@ -2554,6 +2560,7 @@ func (e *Executor) applyResumeState() {
 		}
 		if err := e.graph.MarkExecuted(stepID); err != nil {
 			delete(e.state.Steps, stepID)
+			orphanStepIDs = append(orphanStepIDs, stepID)
 		}
 	}
 	for stepID := range e.state.InFlightSteps {
@@ -2567,11 +2574,10 @@ func (e *Executor) applyResumeState() {
 	}
 	e.stateMu.Unlock()
 
-	if len(rerunStepIDs) == 0 {
-		return
-	}
-
 	for _, stepID := range rerunStepIDs {
+		e.clearStepVariables(stepID)
+	}
+	for _, stepID := range orphanStepIDs {
 		e.clearStepVariables(stepID)
 	}
 }

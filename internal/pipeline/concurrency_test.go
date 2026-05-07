@@ -89,3 +89,47 @@ func TestApplyResumeStateConcurrentWithSnapshots(t *testing.T) {
 	}
 	executor.varMu.RUnlock()
 }
+
+// bd-gtb5p: when applyResumeState removes a persisted step result because
+// graph.MarkExecuted failed (the workflow definition no longer contains
+// that step), the corresponding flat steps.<id>.output / steps.<id>.data
+// variables must be purged so a downstream ${steps.orphan.output} cannot
+// resolve through ghost data after a workflow rename.
+func TestApplyResumeStateClearsOrphanStepVariables(t *testing.T) {
+	workflow := &Workflow{
+		Name:  "resume-orphan-cleanup",
+		Steps: []Step{{ID: "live"}},
+	}
+
+	executor := NewExecutor(DefaultExecutorConfig("session"))
+	executor.graph = NewDependencyGraph(workflow)
+	executor.state = &ExecutionState{
+		RunID:      "run-orphan",
+		WorkflowID: workflow.Name,
+		Status:     StatusRunning,
+		Steps: map[string]StepResult{
+			"live":   {StepID: "live", Status: StatusCompleted, Output: "ok"},
+			"orphan": {StepID: "orphan", Status: StatusCompleted, Output: "stale"},
+		},
+		Variables: map[string]interface{}{
+			"steps.live.output":   "ok",
+			"steps.orphan.output": "stale",
+			"steps.orphan.data":   map[string]interface{}{"key": "stale"},
+		},
+	}
+
+	executor.applyResumeState()
+
+	if _, ok := executor.state.Steps["orphan"]; ok {
+		t.Fatal("orphan step result not removed")
+	}
+	if _, ok := executor.state.Variables["steps.orphan.output"]; ok {
+		t.Fatal("steps.orphan.output ghost variable not cleared after orphan removal")
+	}
+	if _, ok := executor.state.Variables["steps.orphan.data"]; ok {
+		t.Fatal("steps.orphan.data ghost variable not cleared after orphan removal")
+	}
+	if got := executor.state.Variables["steps.live.output"]; got != "ok" {
+		t.Fatalf("live step variable got mutated: %v", got)
+	}
+}
