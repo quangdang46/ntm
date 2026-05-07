@@ -4337,6 +4337,13 @@ func (w *WatchLoop) handleCompletion(event completion.CompletionEvent) error {
 		// nothing has been dispatched — distinguish the log line and skip the
 		// counter/lastAssignmentAt updates so the end-of-session Summary()
 		// doesn't claim work happened that didn't.
+		//
+		// bd-jqg0r: count emitted assignments in this cycle, not the planner
+		// slice length. The previous condition `len(result.Assignments) >= w.limit`
+		// fired on the very first iteration whenever the planner returned at
+		// least limit assignments, so --limit=3 with three planned assignments
+		// stopped after the first dispatch.
+		processed := 0
 		for _, assigned := range result.Assignments {
 			if dryRun {
 				w.logf("Would assign (dry-run): %s -> pane %d (%s)", assigned.BeadID, assigned.Pane, assigned.AgentType)
@@ -4345,9 +4352,9 @@ func (w *WatchLoop) handleCompletion(event completion.CompletionEvent) error {
 				w.lastAssignmentAt = time.Now()
 				w.logf("Assigned: %s -> pane %d (%s)", assigned.BeadID, assigned.Pane, assigned.AgentType)
 			}
+			processed++
 
-			// Respect limit
-			if w.limit > 0 && len(result.Assignments) >= w.limit {
+			if w.limit > 0 && processed >= w.limit {
 				w.logf("Assignment limit (%d) reached for this cycle", w.limit)
 				break
 			}
