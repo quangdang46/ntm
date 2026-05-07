@@ -459,11 +459,19 @@ func validateStep(step *Step, stepField string, stepIDs map[string]bool, result 
 		})
 	}
 
+	// Loop-control-only steps are a first-class step kind for foreach/loop
+	// bodies (bd-oqv4c). The runtime already supports
+	// `{loop_control: break/continue, when: ...}` via foreachControlOnlyStep
+	// in foreach.go; validation must accept it without requiring the author
+	// to attach loop_control to an unrelated work step.
+	hasLoopControlOnly := step.LoopControl == LoopControlBreak || step.LoopControl == LoopControlContinue
+
 	if !hasPrompt && !hasParallel && !hasCommand && !hasTemplate &&
-		!hasForeach && !hasBranch && !hasBeadQuery && !hasMailStep && step.Loop == nil {
+		!hasForeach && !hasBranch && !hasBeadQuery && !hasMailStep &&
+		!hasLoopControlOnly && step.Loop == nil {
 		result.addError(ParseError{
 			Field:   stepField,
-			Message: "step must have prompt, prompt_file, command, template, parallel, loop, foreach, branch, or bead_query",
+			Message: "step must have prompt, prompt_file, command, template, parallel, loop, foreach, branch, bead_query, or loop_control",
 			Hint:    "Pick the step kind that matches the work you want done.",
 		})
 	}

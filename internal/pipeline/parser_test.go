@@ -139,6 +139,43 @@ steps:
 	}
 }
 
+// bd-oqv4c: YAML with a foreach body step that uses loop_control as its
+// only kind (plus a when guard) must parse and validate. Earlier validation
+// rejected it with "step must have prompt, prompt_file, command, ...".
+func TestParseString_YAML_LoopControlOnlyForeachBody(t *testing.T) {
+	content := `
+schema_version: "2.0"
+name: loop-control-yaml
+steps:
+  - id: outer
+    foreach:
+      items: '["a","b","c"]'
+      as: row
+      steps:
+        - id: break_on_c
+          loop_control: break
+          when: '${item} == "c"'
+        - id: real_work
+          command: 'printf %s "${item}"'
+`
+	w, err := ParseString(content, "yaml")
+	if err != nil {
+		t.Fatalf("ParseString failed: %v", err)
+	}
+	result := Validate(w)
+	if !result.Valid {
+		t.Fatalf("Validate() rejected loop_control-only step: %+v", result.Errors)
+	}
+	// Sanity-check the parsed loop_control kind made it through round-trip.
+	body := w.Steps[0].Foreach.Steps
+	if len(body) != 2 {
+		t.Fatalf("expected 2 body steps, got %d", len(body))
+	}
+	if body[0].LoopControl != LoopControlBreak {
+		t.Fatalf("body[0].LoopControl = %q, want break", body[0].LoopControl)
+	}
+}
+
 func TestParseString_TOML(t *testing.T) {
 
 	content := `
@@ -351,7 +388,20 @@ func TestValidate_StepKindMutualExclusivityAndRequiredWork(t *testing.T) {
 		{
 			name:          "empty step has no work",
 			step:          Step{ID: "s1"},
-			wantErrSubstr: "must have prompt, prompt_file, command, template, parallel, loop, foreach, branch, or bead_query",
+			wantErrSubstr: "must have prompt, prompt_file, command, template, parallel, loop, foreach, branch, bead_query, or loop_control",
+		},
+		{
+			// bd-oqv4c: loop_control-only steps are valid; the runtime
+			// supports `{loop_control: break/continue, when: ...}` as
+			// pure control guards inside foreach/loop bodies.
+			name:      "loop_control break only is valid",
+			step:      Step{ID: "s1", LoopControl: LoopControlBreak},
+			wantValid: true,
+		},
+		{
+			name:      "loop_control continue only is valid",
+			step:      Step{ID: "s1", LoopControl: LoopControlContinue, When: `${item} == "skip"`},
+			wantValid: true,
 		},
 		{
 			name: "bead_query only is valid",
