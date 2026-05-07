@@ -80,6 +80,12 @@ var placeholderAllowlist = map[string]map[string]string{
 		"placeholder (case-insensitive, standalone word)": "variable substitution placeholder is domain terminology",
 	},
 
+	// Pipeline template_render documents <KEY> placeholder substitution and the
+	// declaredPlaceholders extractor — domain term for the template renderer.
+	"internal/pipeline/template_render.go": {
+		"placeholder (case-insensitive, standalone word)": "template renderer placeholder is domain terminology (<KEY> substitution)",
+	},
+
 	// Windows process attribute stub — documents that Setpgid is a no-op on Windows.
 	"internal/supervisor/procattr_windows.go": {
 		"placeholder (case-insensitive, standalone word)": "documents Windows no-op for process group attribute",
