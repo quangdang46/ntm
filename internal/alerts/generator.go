@@ -267,8 +267,45 @@ func (g *Generator) detectRateLimit(session string, pane tmux.Pane, lines []stri
 }
 
 // checkDiskSpace is implemented in platform-specific files:
-// - generator_unix.go for Unix systems
-// - (stub implementation returns nil on unsupported platforms)
+// - generator_unix.go for Unix systems (Linux, macOS, *BSD) via syscall.Statfs
+// - generator_windows.go for Windows via golang.org/x/sys/windows.GetDiskFreeSpaceEx
+// - generator_other.go for genuinely unsupported platforms (Plan 9, JS, wasip1)
+//   where it returns (nil, nil) so the alert generator treats disk-space as healthy.
+
+// buildDiskSpaceAlert constructs a low-disk-space Alert from a measured
+// free-space figure and the path that was checked. Shared between
+// platform-specific implementations of checkDiskSpace so threshold logic,
+// severity selection, and Alert shape stay identical across operating systems.
+//
+// freeGB is the free space available to the calling user, in GB.
+// checkPath is the directory or volume that was measured.
+// Returns nil when free space is at or above the configured threshold.
+func (g *Generator) buildDiskSpaceAlert(freeGB float64, checkPath string) *Alert {
+	if freeGB >= g.config.DiskLowThresholdGB {
+		return nil
+	}
+
+	severity := SeverityWarning
+	if freeGB < 1.0 {
+		severity = SeverityCritical
+	}
+
+	return &Alert{
+		ID:       generateAlertID(AlertDiskLow, "", ""),
+		Type:     AlertDiskLow,
+		Severity: severity,
+		Source:   "disk",
+		Message:  fmt.Sprintf("Low disk space: %.1f GB remaining on %s", freeGB, checkPath),
+		Context: map[string]interface{}{
+			"free_gb":      freeGB,
+			"threshold_gb": g.config.DiskLowThresholdGB,
+			"path":         checkPath,
+		},
+		CreatedAt:  time.Now(),
+		LastSeenAt: time.Now(),
+		Count:      1,
+	}
+}
 
 // checkBeadState analyzes beads for stale in-progress items and dependency cycles
 func (g *Generator) checkBeadState() ([]Alert, error) {

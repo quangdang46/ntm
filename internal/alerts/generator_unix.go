@@ -3,9 +3,7 @@
 package alerts
 
 import (
-	"fmt"
 	"syscall"
-	"time"
 )
 
 // checkDiskSpace verifies available disk space (Unix implementation)
@@ -30,33 +28,10 @@ func (g *Generator) checkDiskSpace() (*Alert, error) {
 		}
 	}
 
-	// Calculate free space in GB
+	// Calculate free space in GB.
 	// Convert to float64 directly to handle different field types across Unix variants
-	// (Bavail is int64 on Linux/FreeBSD, uint64 on macOS)
+	// (Bavail is int64 on Linux/FreeBSD, uint64 on macOS).
 	freeGB := float64(stat.Bavail) * float64(stat.Bsize) / (1024 * 1024 * 1024)
 
-	if freeGB < g.config.DiskLowThresholdGB {
-		severity := SeverityWarning
-		if freeGB < 1.0 {
-			severity = SeverityCritical
-		}
-
-		return &Alert{
-			ID:       generateAlertID(AlertDiskLow, "", ""),
-			Type:     AlertDiskLow,
-			Severity: severity,
-			Source:   "disk",
-			Message:  fmt.Sprintf("Low disk space: %.1f GB remaining on %s", freeGB, checkPath),
-			Context: map[string]interface{}{
-				"free_gb":      freeGB,
-				"threshold_gb": g.config.DiskLowThresholdGB,
-				"path":         checkPath,
-			},
-			CreatedAt:  time.Now(),
-			LastSeenAt: time.Now(),
-			Count:      1,
-		}, nil
-	}
-
-	return nil, nil
+	return g.buildDiskSpaceAlert(freeGB, checkPath), nil
 }
