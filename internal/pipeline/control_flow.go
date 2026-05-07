@@ -277,6 +277,90 @@ func (e *Executor) executeOnFailureRecovery(ctx context.Context, step *Step, wor
 	return failed
 }
 
+// maxOnSuccessDepth caps recursion through Step.OnSuccess chains so a
+// pipeline author cannot accidentally write an infinite loop by
+// referencing the parent step in its own success branch (bd-w6nth.7).
+const maxOnSuccessDepth = 5
+
+type onSuccessDepthKey struct{}
+
+func onSuccessDepth(ctx context.Context) int {
+	if ctx == nil {
+		return 0
+	}
+	if v, ok := ctx.Value(onSuccessDepthKey{}).(int); ok {
+		return v
+	}
+	return 0
+}
+
+func withOnSuccessDepth(ctx context.Context, depth int) context.Context {
+	return context.WithValue(ctx, onSuccessDepthKey{}, depth)
+}
+
+// runOnSuccessSteps walks Step.OnSuccess sequentially after a parent
+// step has reached StatusCompleted. Each child runs through executeStep
+// (so its own OnSuccess chain fires recursively) up to maxOnSuccessDepth
+// total. Depth is tracked in the context so recursion through executeStep
+// is bounded even though the call site stays simple. Failures inside an
+// OnSuccess child are logged but NEVER change the parent's Status —
+// they're side-effect dispatches (notifications, hand-offs) rather
+// than gating steps (bd-w6nth.7).
+func (e *Executor) runOnSuccessSteps(ctx context.Context, parent *Step, workflow *Workflow) {
+	if parent == nil || len(parent.OnSuccess) == 0 {
+		return
+	}
+	depth := onSuccessDepth(ctx)
+	if depth >= maxOnSuccessDepth {
+		slog.Warn("on_success recursion depth limit reached; skipping further chain",
+			"run_id", e.state.RunID,
+			"workflow", workflow.Name,
+			"parent_step_id", parent.ID,
+			"depth", depth,
+			"max_depth", maxOnSuccessDepth,
+		)
+		return
+	}
+
+	childCtx := withOnSuccessDepth(ctx, depth+1)
+
+	for i := range parent.OnSuccess {
+		child := parent.OnSuccess[i]
+		if child.ID == "" {
+			child.ID = fmt.Sprintf("%s_on_success_%d", parent.ID, i+1)
+		}
+
+		result := e.executeStep(childCtx, &child, workflow)
+		if result.FinishedAt.IsZero() {
+			result.FinishedAt = time.Now()
+		}
+
+		e.stateMu.Lock()
+		e.state.Steps[child.ID] = result
+		e.state.UpdatedAt = time.Now()
+		if result.Status == StatusFailed && result.Error != nil {
+			slog.Warn("on_success step failed",
+				"run_id", e.state.RunID,
+				"workflow", workflow.Name,
+				"parent_step_id", parent.ID,
+				"step_id", child.ID,
+				"error", result.Error.Message,
+			)
+		}
+		e.stateMu.Unlock()
+
+		if child.OutputVar != "" && result.Status == StatusCompleted {
+			e.varMu.Lock()
+			e.state.Variables[child.OutputVar] = result.Output
+			if result.ParsedData != nil {
+				e.state.Variables[child.OutputVar+"_parsed"] = result.ParsedData
+			}
+			StoreStepOutput(e.state, child.ID, result.Output, result.ParsedData)
+			e.varMu.Unlock()
+		}
+	}
+}
+
 // runPostPipelineSteps iterates Workflow.PostPipelineSteps in order after
 // the main step graph has finished. Each step runs through the regular
 // executeStep machinery so it inherits retries, on_failure, and routing.

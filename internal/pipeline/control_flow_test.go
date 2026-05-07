@@ -703,6 +703,120 @@ func TestOnFailureActionNotSetOnSuccessSkipsRuntimeGuardedStep(t *testing.T) {
 	}
 }
 
+// TestOnSuccessStepsRunOnParentSuccess covers bd-w6nth.7: a successful
+// parent step must trigger every step in its OnSuccess chain. Failures
+// inside the chain are logged but do not flip the parent's status.
+func TestOnSuccessStepsRunOnParentSuccess(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultExecutorConfig("on-success-success")
+	cfg.ProjectDir = tmpDir
+	executor := NewExecutor(cfg)
+
+	workflow := &Workflow{
+		SchemaVersion: SchemaVersion,
+		Name:          "on-success-success-workflow",
+		Settings:      DefaultWorkflowSettings(),
+		Steps: []Step{
+			{
+				ID:      "main",
+				Command: "echo main",
+				OnSuccess: []Step{
+					{ID: "notify", Command: "echo notified"},
+					{ID: "log", Command: "echo logged"},
+				},
+			},
+		},
+	}
+
+	state, err := executor.Run(context.Background(), workflow, nil, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+	if main := state.Steps["main"]; main.Status != StatusCompleted {
+		t.Fatalf("main status = %q, want %q", main.Status, StatusCompleted)
+	}
+	for _, id := range []string{"notify", "log"} {
+		got, ok := state.Steps[id]
+		if !ok {
+			t.Errorf("state.Steps[%q] missing — on_success step did not run", id)
+			continue
+		}
+		if got.Status != StatusCompleted {
+			t.Errorf("on_success step %q status = %q, want %q (error=%+v)", id, got.Status, StatusCompleted, got.Error)
+		}
+	}
+}
+
+// TestOnSuccessStepsSkipOnParentFailure covers bd-w6nth.7: when the
+// parent step fails, OnSuccess steps must NOT run.
+func TestOnSuccessStepsSkipOnParentFailure(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultExecutorConfig("on-success-fail")
+	cfg.ProjectDir = tmpDir
+	executor := NewExecutor(cfg)
+
+	workflow := &Workflow{
+		SchemaVersion: SchemaVersion,
+		Name:          "on-success-fail-workflow",
+		Settings:      DefaultWorkflowSettings(),
+		Steps: []Step{
+			{
+				ID:      "main",
+				Command: "exit 7",
+				OnSuccess: []Step{
+					{ID: "should_not_run", Command: "echo wrong"},
+				},
+			},
+		},
+	}
+
+	state, _ := executor.Run(context.Background(), workflow, nil, nil)
+	if _, ok := state.Steps["should_not_run"]; ok {
+		t.Fatalf("on_success step ran despite parent failure: %#v", state.Steps["should_not_run"])
+	}
+}
+
+// TestOnSuccessChildFailureDoesNotFlipParentStatus covers bd-w6nth.7:
+// if 1 of N OnSuccess steps fails, the others still run and the parent
+// remains StatusCompleted.
+func TestOnSuccessChildFailureDoesNotFlipParentStatus(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultExecutorConfig("on-success-mixed")
+	cfg.ProjectDir = tmpDir
+	executor := NewExecutor(cfg)
+
+	workflow := &Workflow{
+		SchemaVersion: SchemaVersion,
+		Name:          "on-success-mixed-workflow",
+		Settings:      DefaultWorkflowSettings(),
+		Steps: []Step{
+			{
+				ID:      "main",
+				Command: "echo main",
+				OnSuccess: []Step{
+					{ID: "ok_first", Command: "echo first"},
+					{ID: "broken", Command: "exit 9"},
+					{ID: "ok_third", Command: "echo third"},
+				},
+			},
+		},
+	}
+
+	state, _ := executor.Run(context.Background(), workflow, nil, nil)
+	if main := state.Steps["main"]; main.Status != StatusCompleted {
+		t.Fatalf("main status = %q, want completed despite OnSuccess child failure", main.Status)
+	}
+	if state.Steps["ok_first"].Status != StatusCompleted {
+		t.Errorf("ok_first did not run before the broken sibling")
+	}
+	if state.Steps["broken"].Status != StatusFailed {
+		t.Errorf("broken status = %q, want failed", state.Steps["broken"].Status)
+	}
+	if state.Steps["ok_third"].Status != StatusCompleted {
+		t.Errorf("ok_third did not run after the broken sibling")
+	}
+}
+
 // TestRunPostPipelineStepsExecuteAfterMainSuccess covers bd-w6nth.5: when
 // the main pipeline graph completes successfully, post_pipeline_steps
 // must run and their results land in state.Steps.

@@ -766,6 +766,11 @@ func (e *Executor) executeStep(ctx context.Context, step *Step, workflow *Workfl
 			result.FinishedAt = time.Now()
 			e.emitProgress("step_complete", step.ID,
 				stepProgressMessage("Step completed", step, ""), e.calculateProgress())
+			// bd-w6nth.7: run OnSuccess steps after a successful parent.
+			// Failures here are logged but do NOT flip the parent's
+			// Status (matching post_pipeline_steps semantics). Depth is
+			// tracked in ctx so recursive OnSuccess chains can be capped.
+			e.runOnSuccessSteps(ctx, step, workflow)
 			return result
 		}
 
