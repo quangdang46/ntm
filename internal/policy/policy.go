@@ -3,6 +3,7 @@ package policy
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -167,11 +168,21 @@ func (p *Policy) ToYAML() (string, error) {
 }
 
 // compile compiles all regex patterns in the policy.
+// compile compiles every regex pattern in the policy, attempting each
+// rule even when earlier rules fail. Failures are joined via
+// errors.Join and returned together. Rules whose pattern compiled
+// successfully have their regex set; rules that failed have a nil
+// regex and are skipped by Check (which silently treats them as
+// non-matching). Returning all failures at once means a typo in
+// Blocked[0] does not silently disable Blocked[1..N] for the caller.
 func (p *Policy) compile() error {
+	var errs error
+
 	for i := range p.Blocked {
 		re, err := regexp.Compile(p.Blocked[i].Pattern)
 		if err != nil {
-			return fmt.Errorf("invalid blocked pattern %q: %w", p.Blocked[i].Pattern, err)
+			errs = errors.Join(errs, fmt.Errorf("invalid blocked pattern %q: %w", p.Blocked[i].Pattern, err))
+			continue
 		}
 		p.Blocked[i].regex = re
 	}
@@ -179,7 +190,8 @@ func (p *Policy) compile() error {
 	for i := range p.ApprovalRequired {
 		re, err := regexp.Compile(p.ApprovalRequired[i].Pattern)
 		if err != nil {
-			return fmt.Errorf("invalid approval_required pattern %q: %w", p.ApprovalRequired[i].Pattern, err)
+			errs = errors.Join(errs, fmt.Errorf("invalid approval_required pattern %q: %w", p.ApprovalRequired[i].Pattern, err))
+			continue
 		}
 		p.ApprovalRequired[i].regex = re
 	}
@@ -187,12 +199,13 @@ func (p *Policy) compile() error {
 	for i := range p.Allowed {
 		re, err := regexp.Compile(p.Allowed[i].Pattern)
 		if err != nil {
-			return fmt.Errorf("invalid allowed pattern %q: %w", p.Allowed[i].Pattern, err)
+			errs = errors.Join(errs, fmt.Errorf("invalid allowed pattern %q: %w", p.Allowed[i].Pattern, err))
+			continue
 		}
 		p.Allowed[i].regex = re
 	}
 
-	return nil
+	return errs
 }
 
 // Check evaluates a command against the policy and returns a match if found.

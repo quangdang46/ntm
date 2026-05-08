@@ -770,3 +770,44 @@ func TestRecentBlocked(t *testing.T) {
 		t.Errorf("expected nil for nonexistent, got %v", recent)
 	}
 }
+
+// bd-dqpo3: a single malformed pattern in one slice must not silently
+// disable every rule that follows it in the same slice.
+func TestCompile_MalformedPatternDoesNotDisableLaterRules(t *testing.T) {
+	p := &Policy{
+		Blocked: []Rule{
+			{Pattern: `(unclosed`, Reason: "bad regex"},
+			{Pattern: `git\s+reset\s+--hard`, Reason: "still must block hard reset"},
+		},
+	}
+	err := p.compile()
+	if err == nil {
+		t.Fatal("expected compile error for malformed pattern")
+	}
+	// The good rule must still have its regex set.
+	if p.Blocked[1].regex == nil {
+		t.Fatal("good rule (Blocked[1]) regex was nil — early-return killed it")
+	}
+	// And Check must still match the good rule.
+	if got := p.Check("git reset --hard HEAD~1"); got == nil || got.Action != ActionBlock {
+		t.Errorf("Check on good rule = %+v, want a block match", got)
+	}
+}
+
+func TestCompile_AllErrorsJoinedAcrossSlices(t *testing.T) {
+	p := &Policy{
+		Allowed:          []Rule{{Pattern: `(bad-allowed`}},
+		Blocked:          []Rule{{Pattern: `(bad-blocked`}},
+		ApprovalRequired: []Rule{{Pattern: `(bad-approval`}},
+	}
+	err := p.compile()
+	if err == nil {
+		t.Fatal("expected compile error for all three malformed patterns")
+	}
+	msg := err.Error()
+	for _, kind := range []string{"allowed", "blocked", "approval_required"} {
+		if !strings.Contains(msg, kind) {
+			t.Errorf("joined error missing %q category: %v", kind, err)
+		}
+	}
+}
