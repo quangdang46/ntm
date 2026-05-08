@@ -69,7 +69,7 @@ func TestExecuteParallel_BasicExecution(t *testing.T) {
 		t.Errorf("expected 3 step results, got %d", len(e.state.Steps))
 	}
 
-	for _, stepID := range []string{"step1", "step2", "step3"} {
+	for _, stepID := range []string{"parallel_group_step1", "parallel_group_step2", "parallel_group_step3"} {
 		if _, ok := e.state.Steps[stepID]; !ok {
 			t.Errorf("missing step result for %s", stepID)
 		}
@@ -145,9 +145,9 @@ func TestExecuteParallel_UsesWorkflowRetryPolicyForSubsteps(t *testing.T) {
 		t.Fatalf("expected StatusFailed, got %s", result.Status)
 	}
 
-	child, ok := e.state.Steps["step1"]
+	child, ok := e.state.Steps["parallel_group_step1"]
 	if !ok {
-		t.Fatal("missing step result for step1")
+		t.Fatal("missing step result for parallel_group_step1")
 	}
 	if child.Attempts != 3 {
 		t.Fatalf("Attempts = %d, want 3", child.Attempts)
@@ -245,7 +245,7 @@ func TestExecuteParallel_ResultAggregation(t *testing.T) {
 	}
 
 	// Check that both step outputs are accessible
-	for _, stepID := range []string{"task_a", "task_b"} {
+	for _, stepID := range []string{"parallel_group_task_a", "parallel_group_task_b"} {
 		stepData, ok := groupOutputs[stepID]
 		if !ok {
 			t.Errorf("missing output for step %s in group outputs", stepID)
@@ -378,7 +378,7 @@ func TestExecuteParallel_SubstepParallelMaxOperatorOverride(t *testing.T) {
 		t.Fatalf("Status = %q, want %q (operator-cap should not block completion); error = %+v", result.Status, StatusCompleted, result.Error)
 	}
 	for i := 0; i < total; i++ {
-		id := fmt.Sprintf("substep_%d", i)
+		id := fmt.Sprintf("parallel_group_substep_%d", i)
 		if _, ok := e.state.Steps[id]; !ok {
 			t.Errorf("missing step result for %s — semaphore likely starved (cap=%d, total=%d)", id, e.limits.SubstepParallelMax, total)
 		}
@@ -493,8 +493,8 @@ func TestExecuteParallel_ResumeSkipsAlreadyCompletedSubsteps(t *testing.T) {
 	// distinctive output marker; step2 and step3 never completed.
 	priorOutput := "PRIOR-RUN-OUTPUT-step1"
 	priorFinishedAt := time.Now().Add(-1 * time.Hour)
-	e.state.Steps["step1"] = StepResult{
-		StepID:     "step1",
+	e.state.Steps["parallel_group_step1"] = StepResult{
+		StepID:     "parallel_group_step1",
 		Status:     StatusCompleted,
 		StartedAt:  priorFinishedAt.Add(-1 * time.Minute),
 		FinishedAt: priorFinishedAt,
@@ -508,7 +508,7 @@ func TestExecuteParallel_ResumeSkipsAlreadyCompletedSubsteps(t *testing.T) {
 		t.Fatalf("group status = %q, want %q", result.Status, StatusCompleted)
 	}
 
-	got := e.state.Steps["step1"]
+	got := e.state.Steps["parallel_group_step1"]
 	if got.Output != priorOutput {
 		t.Fatalf("step1 was re-dispatched: Output = %q, want preserved %q", got.Output, priorOutput)
 	}
@@ -518,7 +518,7 @@ func TestExecuteParallel_ResumeSkipsAlreadyCompletedSubsteps(t *testing.T) {
 
 	// step2 and step3 still ran, so they have fresh dry-run output (non-empty)
 	// and were never seeded with the prior marker.
-	for _, id := range []string{"step2", "step3"} {
+	for _, id := range []string{"parallel_group_step2", "parallel_group_step3"} {
 		r, ok := e.state.Steps[id]
 		if !ok {
 			t.Fatalf("missing fresh result for %s — should have been dispatched on resume", id)
@@ -528,11 +528,12 @@ func TestExecuteParallel_ResumeSkipsAlreadyCompletedSubsteps(t *testing.T) {
 		}
 	}
 
-	// ParallelState.CompletedStepIDs must include step1 even though it was
-	// adopted, so the parallel-progress invariant holds across the resume.
+	// ParallelState.CompletedStepIDs must include the execution-scoped step
+	// ID even though it was adopted, so the parallel-progress invariant holds
+	// across the resume.
 	gs := e.state.ParallelState[step.ID]
-	if !containsStringSlice(gs.CompletedStepIDs, "step1") {
-		t.Fatalf("ParallelState.CompletedStepIDs = %v, want it to include step1", gs.CompletedStepIDs)
+	if !containsStringSlice(gs.CompletedStepIDs, "parallel_group_step1") {
+		t.Fatalf("ParallelState.CompletedStepIDs = %v, want it to include parallel_group_step1", gs.CompletedStepIDs)
 	}
 }
 
@@ -649,8 +650,8 @@ func TestExecuteParallel_ResumeCompletionOrderDeterministic(t *testing.T) {
 		Status:     StatusRunning,
 		StartedAt:  time.Now(),
 		Steps: map[string]StepResult{
-			"adopted": {
-				StepID:     "adopted",
+			"parallel_group_adopted": {
+				StepID:     "parallel_group_adopted",
 				Status:     StatusCompleted,
 				StartedAt:  priorFinishedAt.Add(-10 * time.Millisecond),
 				FinishedAt: priorFinishedAt,
@@ -672,9 +673,9 @@ func TestExecuteParallel_ResumeCompletionOrderDeterministic(t *testing.T) {
 
 	// The adopted entry's FinishedAt is far earlier than the fresh
 	// substeps' (which use time.Now during DryRun). Build the same order
-	// the post-wg.Wait reconstruction would produce and assert "adopted"
-	// sorts to position 0 deterministically.
-	allIDs := []string{"adopted", "fresh_a", "fresh_b"}
+	// the post-wg.Wait reconstruction would produce and assert the adopted
+	// substep sorts to position 0 deterministically.
+	allIDs := []string{"parallel_group_adopted", "parallel_group_fresh_a", "parallel_group_fresh_b"}
 	missing := []string{}
 	for _, id := range allIDs {
 		if _, ok := e.state.Steps[id]; !ok {
@@ -685,7 +686,7 @@ func TestExecuteParallel_ResumeCompletionOrderDeterministic(t *testing.T) {
 		t.Fatalf("missing step results: %v", missing)
 	}
 
-	adopted := e.state.Steps["adopted"]
+	adopted := e.state.Steps["parallel_group_adopted"]
 	if !adopted.FinishedAt.Equal(priorFinishedAt) {
 		t.Errorf("adopted.FinishedAt = %v, want %v (must preserve prior-run timestamp, not stamp current time)", adopted.FinishedAt, priorFinishedAt)
 	}

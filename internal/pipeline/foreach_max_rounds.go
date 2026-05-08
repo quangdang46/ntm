@@ -181,13 +181,9 @@ func (e *Executor) resolveForeachMaxRounds(parent *Step) (int, error) {
 //   - OnSuccess: runOnSuccessSteps derives `<parent.ID>_on_success_<child.ID>`
 //     (or `<parent.ID>_on_success_<N>` for anonymous children), so explicit
 //     on_success IDs inside a foreach body inherit the materialized parent ID.
-//
-// Branch and Parallel dispatchers do NOT chain parent.ID into nested keys
-// today (see executeBranch / executeParallel), so a Branch or Parallel block
-// nested directly inside a max_rounds body would collide across rounds. That
-// is a separate concern from rewriteRoundStepIDs — fixing it requires
-// teaching those dispatchers to namespace their children by parent.ID, not
-// recursing here.
+//   - Branch and Parallel: executeBranch / executeParallel rewrite child IDs
+//     through scopedChildStepID, so child state keys inherit the materialized
+//     parent ID before they are stored.
 func rewriteRoundStepIDs(steps []Step, round int) []Step {
 	if len(steps) == 0 {
 		return steps

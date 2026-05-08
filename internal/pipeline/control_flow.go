@@ -93,6 +93,22 @@ func parseBranchSteps(val interface{}, parentID, branchKey string) ([]Step, erro
 	return nil, fmt.Errorf("branch value for key %q is neither a step nor a list of steps", branchKey)
 }
 
+func scopedChildStepID(parentID, childID string, ordinal int) string {
+	if parentID == "" {
+		if childID != "" {
+			return childID
+		}
+		return fmt.Sprintf("child_%d", ordinal)
+	}
+	if childID == "" {
+		return fmt.Sprintf("%s_child_%d", parentID, ordinal)
+	}
+	if childID == parentID || strings.HasPrefix(childID, parentID+"_") || strings.HasPrefix(childID, parentID+".") {
+		return childID
+	}
+	return fmt.Sprintf("%s_%s", parentID, childID)
+}
+
 // executeBranch resolves the branch predicate, looks up the matching branch,
 // parses the branch body into steps, and executes them sequentially.
 func (e *Executor) executeBranch(ctx context.Context, step *Step, workflow *Workflow) StepResult {
@@ -209,6 +225,7 @@ func (e *Executor) executeBranch(ctx context.Context, step *Step, workflow *Work
 			"iteration", i,
 		)
 
+		bs.ID = scopedChildStepID(step.ID, bs.ID, i+1)
 		sr := e.executeStepOnce(ctx, &bs, workflow)
 
 		// bd-afwly: branch body steps now honor the on_failure runtime

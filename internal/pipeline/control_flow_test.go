@@ -867,6 +867,104 @@ func TestOnSuccessExplicitIDsInsideForeachAreNamespaced(t *testing.T) {
 	}
 }
 
+func TestBranchChildrenInsideForeachAreNamespaced(t *testing.T) {
+	executor := NewExecutor(DefaultExecutorConfig("branch-foreach"))
+
+	workflow := &Workflow{
+		SchemaVersion: SchemaVersion,
+		Name:          "branch-foreach-workflow",
+		Settings:      DefaultWorkflowSettings(),
+		Steps: []Step{{
+			ID: "outer",
+			Foreach: &ForeachConfig{
+				Items: `["alpha","beta"]`,
+				As:    "item",
+				Steps: []Step{{
+					ID:     "route",
+					Branch: "go",
+					Branches: map[string]interface{}{
+						"go": map[string]interface{}{
+							"id":      "chosen",
+							"command": "echo branch-child",
+						},
+					},
+				}},
+			},
+		}},
+	}
+
+	state, err := executor.Run(context.Background(), workflow, nil, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+	if _, ok := state.Steps["chosen"]; ok {
+		t.Fatalf("state.Steps[chosen] present — branch child ID was not namespaced")
+	}
+
+	for _, id := range []string{"outer_iter0_route_chosen", "outer_iter1_route_chosen"} {
+		got, ok := state.Steps[id]
+		if !ok {
+			t.Fatalf("state.Steps[%q] missing — branch child result collided or did not run", id)
+		}
+		if got.Status != StatusCompleted {
+			t.Fatalf("%s status = %q, want completed; error=%+v", id, got.Status, got.Error)
+		}
+	}
+}
+
+func TestParallelChildrenInsideForeachAreNamespaced(t *testing.T) {
+	cfg := DefaultExecutorConfig("parallel-foreach")
+	cfg.DryRun = true
+	executor := NewExecutor(cfg)
+	executor.SetTmuxClient(NewMockTmuxClient(tmux.Pane{ID: "%1", Index: 1, Type: tmux.AgentCodex}))
+
+	workflow := &Workflow{
+		SchemaVersion: SchemaVersion,
+		Name:          "parallel-foreach-workflow",
+		Settings:      DefaultWorkflowSettings(),
+		Steps: []Step{{
+			ID: "outer",
+			Foreach: &ForeachConfig{
+				Items: `["alpha","beta"]`,
+				As:    "item",
+				Steps: []Step{{
+					ID: "fanout",
+					Parallel: ParallelSpec{Steps: []Step{{
+						ID:     "worker",
+						Pane:   PaneSpec{Index: 1},
+						Prompt: "work ${item}",
+					}}},
+				}},
+			},
+		}},
+	}
+
+	state, err := executor.Run(context.Background(), workflow, nil, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+	if _, ok := state.Steps["worker"]; ok {
+		t.Fatalf("state.Steps[worker] present — parallel child ID was not namespaced")
+	}
+
+	expected := map[string]string{
+		"outer_iter0_fanout_worker": "work alpha",
+		"outer_iter1_fanout_worker": "work beta",
+	}
+	for id, wantOutput := range expected {
+		got, ok := state.Steps[id]
+		if !ok {
+			t.Fatalf("state.Steps[%q] missing — parallel child result collided or did not run", id)
+		}
+		if got.Status != StatusCompleted {
+			t.Fatalf("%s status = %q, want completed; error=%+v", id, got.Status, got.Error)
+		}
+		if !strings.Contains(got.Output, wantOutput) {
+			t.Fatalf("%s output = %q, want to contain %q", id, got.Output, wantOutput)
+		}
+	}
+}
+
 // TestRunPostPipelineStepsExecuteAfterMainSuccess covers bd-w6nth.5: when
 // the main pipeline graph completes successfully, post_pipeline_steps
 // must run and their results land in state.Steps.
@@ -974,14 +1072,14 @@ func TestOnFailureActionFiresInsideBranchBody(t *testing.T) {
 		t.Fatalf("Run() error = %v, want nil after handled on_failure action", err)
 	}
 
-	register := state.Steps["register_mail"]
+	register := state.Steps["router_register_mail"]
 	if register.Status != StatusSkipped {
 		t.Fatalf("register_mail status = %s, want skipped (on_failure handled inside branch body)", register.Status)
 	}
 	if register.SkipKind != SkipKindOnFailureAction {
 		t.Fatalf("register_mail SkipKind = %q, want %q", register.SkipKind, SkipKindOnFailureAction)
 	}
-	if got := state.Variables["runtime.register_mail_failure_action"]; got != "fallback_to_ntm_inbox" {
+	if got := state.Variables["runtime.router_register_mail_failure_action"]; got != "fallback_to_ntm_inbox" {
 		t.Fatalf("runtime failure action = %v, want fallback_to_ntm_inbox", got)
 	}
 }
@@ -1021,14 +1119,14 @@ func TestOnFailureActionFiresInsideParallelChild(t *testing.T) {
 
 	state, _ := executor.Run(context.Background(), workflow, nil, nil)
 
-	register := state.Steps["register_mail"]
+	register := state.Steps["fanout_register_mail"]
 	if register.Status != StatusSkipped {
 		t.Fatalf("register_mail status = %s, want skipped (on_failure handled inside parallel group); error=%+v", register.Status, register.Error)
 	}
 	if register.SkipKind != SkipKindOnFailureAction {
 		t.Fatalf("register_mail SkipKind = %q, want %q", register.SkipKind, SkipKindOnFailureAction)
 	}
-	if got := state.Variables["runtime.register_mail_failure_action"]; got != "fallback_to_ntm_inbox" {
+	if got := state.Variables["runtime.fanout_register_mail_failure_action"]; got != "fallback_to_ntm_inbox" {
 		t.Fatalf("runtime failure action = %v, want fallback_to_ntm_inbox", got)
 	}
 }

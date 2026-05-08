@@ -1916,6 +1916,8 @@ func (e *Executor) executeParallel(ctx context.Context, step *Step, workflow *Wo
 	sem := make(chan struct{}, substepLimit)
 
 	for i, pStep := range step.Parallel.Steps {
+		pStep.ID = scopedChildStepID(step.ID, pStep.ID, i+1)
+
 		// bd-qbymk: when resuming a parallel group whose parent never
 		// completed but some children did persist completed StepResults,
 		// applyResumeState retains those entries. Re-dispatching them here
