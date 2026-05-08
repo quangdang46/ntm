@@ -338,6 +338,19 @@ func (q *JobQueue) CancelSession(sessionName string) []*SpawnJob {
 	if len(cancelled) > 0 {
 		q.jobs = retained
 		heap.Init(&q.jobs)
+		// bd-s8sex: cancelled jobs span arbitrary batches; decrement
+		// the cross-axis batchCounts so a follow-up CountByBatch does
+		// not return phantom counts for jobs that no longer exist.
+		// Mirrors the Dequeue/Remove pattern.
+		for _, job := range cancelled {
+			if job.BatchID == "" {
+				continue
+			}
+			q.batchCounts[job.BatchID]--
+			if q.batchCounts[job.BatchID] <= 0 {
+				delete(q.batchCounts, job.BatchID)
+			}
+		}
 		delete(q.sessionCounts, sessionName)
 		q.stats.CurrentSize = len(q.jobs)
 	}
@@ -366,6 +379,16 @@ func (q *JobQueue) CancelBatch(batchID string) []*SpawnJob {
 	if len(cancelled) > 0 {
 		q.jobs = retained
 		heap.Init(&q.jobs)
+		// bd-s8sex: cancelled jobs span arbitrary sessions; decrement
+		// the cross-axis sessionCounts so a follow-up CountBySession
+		// does not return phantom counts for jobs that no longer exist.
+		// Mirrors the Dequeue/Remove pattern.
+		for _, job := range cancelled {
+			q.sessionCounts[job.SessionName]--
+			if q.sessionCounts[job.SessionName] <= 0 {
+				delete(q.sessionCounts, job.SessionName)
+			}
+		}
 		delete(q.batchCounts, batchID)
 		q.stats.CurrentSize = len(q.jobs)
 	}

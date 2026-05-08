@@ -473,6 +473,88 @@ func TestJobQueue_CancelBatch(t *testing.T) {
 	}
 }
 
+// bd-s8sex: CancelSession must decrement the cross-axis batchCounts
+// for every cancelled job, not just delete its own sessionCounts entry.
+// Pre-fix CountByBatch returned phantom counts after CancelSession
+// because the cancelled jobs' batch entries were never decremented.
+func TestJobQueue_CancelSession_DecrementsBatchCounts(t *testing.T) {
+	t.Parallel()
+	q := NewJobQueue()
+
+	mk := func(id, sess, batch string) *SpawnJob {
+		j := NewSpawnJob(id, JobTypeSession, sess)
+		j.BatchID = batch
+		return j
+	}
+	q.Enqueue(mk("j1", "foo", "batch-A"))
+	q.Enqueue(mk("j2", "foo", "batch-A"))
+	q.Enqueue(mk("j3", "foo", "batch-B"))
+	q.Enqueue(mk("j4", "bar", "batch-C"))
+
+	if got := q.CountByBatch("batch-A"); got != 2 {
+		t.Fatalf("pre-cancel: CountByBatch(batch-A) = %d, want 2", got)
+	}
+	if got := q.CountByBatch("batch-B"); got != 1 {
+		t.Fatalf("pre-cancel: CountByBatch(batch-B) = %d, want 1", got)
+	}
+
+	q.CancelSession("foo")
+
+	if got := q.CountBySession("foo"); got != 0 {
+		t.Errorf("post-cancel: CountBySession(foo) = %d, want 0", got)
+	}
+	if got := q.CountByBatch("batch-A"); got != 0 {
+		t.Errorf("post-cancel: CountByBatch(batch-A) = %d, want 0 (all 2 jobs cancelled)", got)
+	}
+	if got := q.CountByBatch("batch-B"); got != 0 {
+		t.Errorf("post-cancel: CountByBatch(batch-B) = %d, want 0 (1 job cancelled)", got)
+	}
+	if got := q.CountByBatch("batch-C"); got != 1 {
+		t.Errorf("post-cancel: CountByBatch(batch-C) = %d, want 1 (untouched)", got)
+	}
+	if got := q.CountBySession("bar"); got != 1 {
+		t.Errorf("post-cancel: CountBySession(bar) = %d, want 1 (untouched)", got)
+	}
+}
+
+// bd-s8sex: CancelBatch must decrement the cross-axis sessionCounts
+// for every cancelled job, not just delete its own batchCounts entry.
+func TestJobQueue_CancelBatch_DecrementsSessionCounts(t *testing.T) {
+	t.Parallel()
+	q := NewJobQueue()
+
+	mk := func(id, sess, batch string) *SpawnJob {
+		j := NewSpawnJob(id, JobTypeSession, sess)
+		j.BatchID = batch
+		return j
+	}
+	q.Enqueue(mk("j1", "foo", "batch-A"))
+	q.Enqueue(mk("j2", "bar", "batch-A"))
+	q.Enqueue(mk("j3", "foo", "batch-B"))
+
+	if got := q.CountBySession("foo"); got != 2 {
+		t.Fatalf("pre-cancel: CountBySession(foo) = %d, want 2", got)
+	}
+	if got := q.CountBySession("bar"); got != 1 {
+		t.Fatalf("pre-cancel: CountBySession(bar) = %d, want 1", got)
+	}
+
+	q.CancelBatch("batch-A")
+
+	if got := q.CountByBatch("batch-A"); got != 0 {
+		t.Errorf("post-cancel: CountByBatch(batch-A) = %d, want 0", got)
+	}
+	if got := q.CountBySession("foo"); got != 1 {
+		t.Errorf("post-cancel: CountBySession(foo) = %d, want 1 (j3 still in batch-B)", got)
+	}
+	if got := q.CountBySession("bar"); got != 0 {
+		t.Errorf("post-cancel: CountBySession(bar) = %d, want 0 (only job was in batch-A)", got)
+	}
+	if got := q.CountByBatch("batch-B"); got != 1 {
+		t.Errorf("post-cancel: CountByBatch(batch-B) = %d, want 1 (untouched)", got)
+	}
+}
+
 func TestJobQueue_Stats(t *testing.T) {
 	t.Parallel()
 	q := NewJobQueue()
