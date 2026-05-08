@@ -4,6 +4,7 @@ package health
 import (
 	"context"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -183,6 +184,17 @@ func CheckSession(ctx context.Context, session string) (*SessionHealth, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
+
+	// bd-brr6h: parallel checkAgent goroutines append to health.Agents
+	// in completion order, not source order. Sort by (Pane, PaneID) so
+	// two CheckSession calls against the same pane set produce byte-
+	// stable JSON output downstream — sibling of bd-c9wr1.
+	sort.SliceStable(health.Agents, func(i, j int) bool {
+		if health.Agents[i].Pane != health.Agents[j].Pane {
+			return health.Agents[i].Pane < health.Agents[j].Pane
+		}
+		return health.Agents[i].PaneID < health.Agents[j].PaneID
+	})
 
 	return health, nil
 }

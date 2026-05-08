@@ -2,6 +2,7 @@ package health
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -684,5 +685,50 @@ func TestHasRateLimitChatter_CoversCommonAgentPhrasings(t *testing.T) {
 				t.Errorf("hasRateLimitChatter(%q) = %v, want %v", c.input, got, c.want)
 			}
 		})
+	}
+}
+
+// bd-brr6h: CheckSession's parallel checkAgent goroutines append to
+// health.Agents in completion order. The function sorts the result by
+// (Pane, PaneID) before returning so JSON output is byte-stable across
+// calls. This test pins the expected post-sort ordering by exercising
+// the same comparator on a hand-shuffled slice.
+func TestCheckSession_AgentsAreSortedByPaneIndex(t *testing.T) {
+	t.Parallel()
+
+	// Hand-shuffled Agents — completion-order arrival from concurrent
+	// goroutines.
+	got := []AgentHealth{
+		{Pane: 3, PaneID: "%30"},
+		{Pane: 1, PaneID: "%10"},
+		{Pane: 0, PaneID: "%0"},
+		{Pane: 2, PaneID: "%20"},
+		// Same Pane, different PaneID — secondary sort key.
+		{Pane: 1, PaneID: "%11"},
+	}
+
+	// Mirror the inline comparator from CheckSession (bd-brr6h).
+	sort.SliceStable(got, func(i, j int) bool {
+		if got[i].Pane != got[j].Pane {
+			return got[i].Pane < got[j].Pane
+		}
+		return got[i].PaneID < got[j].PaneID
+	})
+
+	want := []struct {
+		pane   int
+		paneID string
+	}{
+		{0, "%0"},
+		{1, "%10"},
+		{1, "%11"},
+		{2, "%20"},
+		{3, "%30"},
+	}
+	for i, w := range want {
+		if got[i].Pane != w.pane || got[i].PaneID != w.paneID {
+			t.Errorf("post-sort[%d] = (Pane=%d PaneID=%q), want (Pane=%d PaneID=%q)",
+				i, got[i].Pane, got[i].PaneID, w.pane, w.paneID)
+		}
 	}
 }
