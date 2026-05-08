@@ -1,6 +1,7 @@
 package handoff
 
 import (
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -53,9 +54,10 @@ func (h *Handoff) ScoreQuality(now time.Time) QualityReport {
 	for _, dimension := range dimensions {
 		total += dimension.Score
 	}
-	score := total / len(dimensions)
+	mean := float64(total) / float64(len(dimensions))
+	score := clampQuality(int(math.Round(mean)))
 	report := QualityReport{
-		Score:      clampQuality(score),
+		Score:      score,
 		Status:     qualityStatus(score),
 		ScoredAt:   now.UTC(),
 		Dimensions: dimensions,

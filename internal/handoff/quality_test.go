@@ -1,6 +1,7 @@
 package handoff
 
 import (
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -115,6 +116,78 @@ func TestGenerateFromOutputPopulatesQuality(t *testing.T) {
 	}
 	if len(h.Quality.Dimensions) != 4 {
 		t.Fatalf("quality dimensions = %d, want 4", len(h.Quality.Dimensions))
+	}
+}
+
+func TestQualityStatusIsMonotonicInScore(t *testing.T) {
+	prev := QualityStatusLow
+	rank := map[string]int{
+		QualityStatusLow:    0,
+		QualityStatusMedium: 1,
+		QualityStatusHigh:   2,
+	}
+	for s := 0; s <= 100; s++ {
+		got := qualityStatus(s)
+		if rank[got] < rank[prev] {
+			t.Fatalf("status went backward at score=%d: %q -> %q", s, prev, got)
+		}
+		prev = got
+	}
+	if qualityStatus(0) != QualityStatusLow {
+		t.Fatalf("score=0 should map to %q, got %q", QualityStatusLow, qualityStatus(0))
+	}
+	if qualityStatus(59) != QualityStatusLow || qualityStatus(60) != QualityStatusMedium {
+		t.Fatalf("low/medium boundary broken: 59=%q 60=%q", qualityStatus(59), qualityStatus(60))
+	}
+	if qualityStatus(79) != QualityStatusMedium || qualityStatus(80) != QualityStatusHigh {
+		t.Fatalf("medium/high boundary broken: 79=%q 80=%q", qualityStatus(79), qualityStatus(80))
+	}
+}
+
+func TestQualityStatusClampsOutOfRangeScores(t *testing.T) {
+	if got := qualityStatus(clampQuality(150)); got != QualityStatusHigh {
+		t.Fatalf("clamped over-100 score should map to %q, got %q", QualityStatusHigh, got)
+	}
+	if got := qualityStatus(clampQuality(-50)); got != QualityStatusLow {
+		t.Fatalf("clamped negative score should map to %q, got %q", QualityStatusLow, got)
+	}
+}
+
+func TestScoreQualityRoundsToNearestInsteadOfTruncating(t *testing.T) {
+	now := time.Date(2026, 5, 8, 7, 0, 0, 0, time.UTC)
+	h := New("rounding")
+	h.CreatedAt = now
+	h.UpdatedAt = now
+	h.WithGoalAndNow("g", "n")
+	h.Test = "t"
+	h.AddTask("done", "internal/handoff/types.go")
+	h.MarkModified("internal/handoff/types.go")
+	h.AddDecision("d", "x")
+	h.Next = []string{"keep going"}
+	h.ActiveBeads = []string{"bd-x"}
+	h.AgentMailThreads = []string{"thread"}
+	h.CMMemories = []string{"mem"}
+	h.SetAgentInfo("a", AgentTypeCodex, "%1")
+
+	report := h.ScoreQuality(now)
+
+	manualTotal := 0
+	for _, dim := range report.Dimensions {
+		manualTotal += dim.Score
+	}
+	expected := int(math.Round(float64(manualTotal) / float64(len(report.Dimensions))))
+	if expected < 0 {
+		expected = 0
+	}
+	if expected > 100 {
+		expected = 100
+	}
+	if report.Score != expected {
+		t.Fatalf("score = %d, want rounded mean %d (total=%d dims=%d)", report.Score, expected, manualTotal, len(report.Dimensions))
+	}
+	truncated := manualTotal / len(report.Dimensions)
+	if expected != truncated && report.Score == truncated {
+		t.Fatalf("score still uses integer truncation: got %d, rounded want %d", report.Score, expected)
 	}
 }
 
