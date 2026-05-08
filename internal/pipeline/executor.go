@@ -3825,6 +3825,11 @@ func (e *Executor) applyStartFrom(workflow *Workflow) error {
 	now := time.Now()
 	prior := e.config.StartFromState
 
+	// bd-8wo27: canonical lock order across the pipeline executor is
+	// stateMu before varMu when both must be held nested. Every other
+	// call site that holds both follows this order; flipping it
+	// (varMu→stateMu) reintroduces the AB-BA deadlock that bd-8wo27
+	// fixed in foreach_max_rounds.resolveForeachMaxRounds.
 	e.stateMu.Lock()
 	e.varMu.Lock()
 	for _, id := range skipped {

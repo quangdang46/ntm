@@ -100,8 +100,17 @@ func (e *Executor) resolveForeachMaxRounds(parent *Step) (int, error) {
 		return mr.Value, nil
 	}
 
-	e.varMu.RLock()
+	// bd-8wo27: lock order is stateMu before varMu (matches the canonical
+	// pattern in executor.go applyStartFrom). The previous order
+	// (varMu→stateMu) created an AB-BA deadlock window against any
+	// goroutine using the canonical order — sync.RWMutex's writer-
+	// starvation guard would block a concurrent stateMu.RLock() behind a
+	// pending stateMu.Lock(), at the same time the canonical-order writer
+	// was waiting on varMu we held. Holding stateMu first matches every
+	// other call site that nests the two locks, so a future caller cannot
+	// reintroduce the cycle without also flipping executor.go.
 	e.stateMu.RLock()
+	e.varMu.RLock()
 	workflowID := ""
 	if e.state != nil {
 		workflowID = e.state.WorkflowID
@@ -110,8 +119,8 @@ func (e *Executor) resolveForeachMaxRounds(parent *Step) (int, error) {
 	sub.SetDefaults(e.defaults)
 	sub.SetMaxDepth(e.limits.MaxSubstitutionDepth)
 	resolved, subErr := sub.SubstituteStrict(e.substituteRuntimeVariables(mr.Expr))
-	e.stateMu.RUnlock()
 	e.varMu.RUnlock()
+	e.stateMu.RUnlock()
 
 	if subErr != nil {
 		return 0, fmt.Errorf("resolve max_rounds expression %q: %w", mr.Expr, subErr)
