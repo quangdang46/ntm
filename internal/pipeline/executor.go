@@ -2405,6 +2405,17 @@ func (e *Executor) executeParallelStep(ctx context.Context, step *Step, workflow
 			StoreStepOutput(e.state, step.ID, result.Output, result.ParsedData)
 			e.varMu.Unlock()
 
+			// bd-2g48y: parallel substeps run through this inlined dispatch
+			// path (not the executeStep retry loop), so the OnSuccess hook
+			// at executor.go:847 was never fired for an on_success chain
+			// attached to a parallel substep. Fire it here on the same
+			// Completed contract (matches command-step parents, bd-h8lc4's
+			// top-level Parallel/Loop fix, and the bd-2g48y branch case).
+			// step.ID is already namespaced via scopedChildStepID at the
+			// dispatcher (executor.go:1919) so OnSuccess child results
+			// land at <parent>_<substep>_on_success_<...>.
+			e.runOnSuccessSteps(ctx, step, workflow)
+
 			return result
 		}
 

@@ -244,6 +244,18 @@ func (e *Executor) executeBranch(ctx context.Context, step *Step, workflow *Work
 		e.state.Steps[bs.ID] = sr
 		e.stateMu.Unlock()
 
+		// bd-2g48y: branch body steps reach this seam via executeStepOnce
+		// (not the executeStep retry loop), so the OnSuccess hook at
+		// executor.go:847 was never fired for an on_success chain attached
+		// to a branch body step. Fire it here on the same Completed
+		// contract (matches command-step parents and bd-h8lc4's top-level
+		// Parallel/Loop fix). bs.ID is already namespaced via
+		// scopedChildStepID above so OnSuccess child results land at
+		// <branch.ID>_<branchKey>_<chosenChild>_on_success_<...>.
+		if sr.Status == StatusCompleted {
+			e.runOnSuccessSteps(ctx, &bs, workflow)
+		}
+
 		if sr.Status == StatusFailed || sr.Status == StatusCancelled {
 			allPassed = false
 			result.Status = sr.Status
