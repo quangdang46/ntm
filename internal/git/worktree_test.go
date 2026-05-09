@@ -84,6 +84,54 @@ func TestCanonicalSessionKey(t *testing.T) {
 	}
 }
 
+func TestCanonicalAgentKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty falls back", "", "agent"},
+		{"preserves normal agent type", "claude", "claude"},
+		{"normalizes path separators", "../evil/type", "evil-type"},
+		{"collapses punctuation", "***codex///agent***", "codex-agent"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := canonicalAgentKey(tc.in)
+			if got != tc.want {
+				t.Fatalf("canonicalAgentKey(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorktreeManager_ProvisionWorktreeSanitizesAgentName(t *testing.T) {
+	repo := setupGitRepo(t)
+	wm, err := NewWorktreeManager(repo)
+	if err != nil {
+		t.Fatalf("NewWorktreeManager: %v", err)
+	}
+
+	info, err := wm.ProvisionWorktree(context.Background(), "../evil/type", "sess/one")
+	if err != nil {
+		t.Fatalf("ProvisionWorktree: %v", err)
+	}
+
+	if got, want := filepath.Base(info.Path), "agent-evil-type-sess-one"; got != want {
+		t.Fatalf("worktree basename = %q, want %q", got, want)
+	}
+	if info.Branch != "agent/evil-type/sess-one" {
+		t.Fatalf("branch = %q, want sanitized agent and session components", info.Branch)
+	}
+	if info.Agent != "evil-type" {
+		t.Fatalf("Agent = %q, want sanitized agent key", info.Agent)
+	}
+}
+
 func TestWorktreeManager_worktreeExists(t *testing.T) {
 	t.Parallel()
 

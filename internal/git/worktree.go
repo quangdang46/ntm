@@ -12,20 +12,16 @@ import (
 	"time"
 )
 
-// canonicalSessionKey converts a session identity into a git-safe key
-// without truncating uniqueness-bearing suffixes like agent type/number.
-// The previous 8-char truncation caused alias collisions across distinct
-// sessions/panes (bd-l542u).
-func canonicalSessionKey(sessionID string) string {
-	if sessionID == "" {
-		return "session"
+func canonicalWorktreeKey(value, fallback string) string {
+	if value == "" {
+		return fallback
 	}
 
 	var b strings.Builder
-	b.Grow(len(sessionID))
+	b.Grow(len(value))
 	lastDash := false
 
-	for _, r := range sessionID {
+	for _, r := range value {
 		switch {
 		case r >= 'a' && r <= 'z',
 			r >= 'A' && r <= 'Z',
@@ -50,9 +46,21 @@ func canonicalSessionKey(sessionID string) string {
 
 	key := strings.Trim(b.String(), "-.")
 	if key == "" {
-		return "session"
+		return fallback
 	}
 	return key
+}
+
+// canonicalSessionKey converts a session identity into a git-safe key
+// without truncating uniqueness-bearing suffixes like agent type/number.
+// The previous 8-char truncation caused alias collisions across distinct
+// sessions/panes (bd-l542u).
+func canonicalSessionKey(sessionID string) string {
+	return canonicalWorktreeKey(sessionID, "session")
+}
+
+func canonicalAgentKey(agentName string) string {
+	return canonicalWorktreeKey(agentName, "agent")
 }
 
 // WorktreeManager handles git worktree creation and management for agent isolation
@@ -86,8 +94,11 @@ type WorktreeInfo struct {
 
 // ProvisionWorktree creates an isolated worktree for an agent
 func (wm *WorktreeManager) ProvisionWorktree(ctx context.Context, agentName, sessionID string) (*WorktreeInfo, error) {
+	agentKey := canonicalAgentKey(agentName)
+	sessionKey := canonicalSessionKey(sessionID)
+
 	// Generate a unique worktree name
-	worktreeName := fmt.Sprintf("agent-%s-%s", agentName, canonicalSessionKey(sessionID))
+	worktreeName := fmt.Sprintf("agent-%s-%s", agentKey, sessionKey)
 	workingDir := filepath.Join(wm.baseRepo, "..", worktreeName)
 
 	// Check if worktree already exists
@@ -99,7 +110,7 @@ func (wm *WorktreeManager) ProvisionWorktree(ctx context.Context, agentName, ses
 	}
 
 	// Create a new branch for this agent
-	branchName := fmt.Sprintf("agent/%s/%s", agentName, canonicalSessionKey(sessionID))
+	branchName := fmt.Sprintf("agent/%s/%s", agentKey, sessionKey)
 
 	// Get current branch and commit for base
 	currentBranch, err := wm.getCurrentBranch()
@@ -125,7 +136,7 @@ func (wm *WorktreeManager) ProvisionWorktree(ctx context.Context, agentName, ses
 		Path:      workingDir,
 		Branch:    branchName,
 		Commit:    commit,
-		Agent:     agentName,
+		Agent:     agentKey,
 		CreatedAt: time.Now(),
 		LastUsed:  time.Now(),
 	}
@@ -148,9 +159,11 @@ func (wm *WorktreeManager) ListWorktrees(ctx context.Context) ([]*WorktreeInfo, 
 
 // RemoveWorktree removes a worktree and its associated branch
 func (wm *WorktreeManager) RemoveWorktree(ctx context.Context, agentName, sessionID string) error {
-	worktreeName := fmt.Sprintf("agent-%s-%s", agentName, canonicalSessionKey(sessionID))
+	agentKey := canonicalAgentKey(agentName)
+	sessionKey := canonicalSessionKey(sessionID)
+	worktreeName := fmt.Sprintf("agent-%s-%s", agentKey, sessionKey)
 	workingDir := filepath.Join(wm.baseRepo, "..", worktreeName)
-	branchName := fmt.Sprintf("agent/%s/%s", agentName, canonicalSessionKey(sessionID))
+	branchName := fmt.Sprintf("agent/%s/%s", agentKey, sessionKey)
 
 	// Remove the worktree
 	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", workingDir)

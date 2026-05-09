@@ -90,6 +90,19 @@ func TestExtractTarGz_NestedEntryWithoutDirectoryHeaderSucceeds(t *testing.T) {
 	}
 }
 
+func TestExtractTarGz_RejectsTraversalEntry(t *testing.T) {
+	archive := writeTarGzWithEntry(t, "../ntm", []byte("hello"), 0o755)
+	dest := t.TempDir()
+
+	_, err := extractTarGz(archive, dest)
+	if err == nil {
+		t.Fatal("extractTarGz returned nil error for traversal entry")
+	}
+	if !strings.Contains(err.Error(), "illegal archive entry path") {
+		t.Fatalf("error = %q, want illegal archive entry path", err.Error())
+	}
+}
+
 func TestExtractTarGz_EntryExceedsCapErrorsWithBombMessage(t *testing.T) {
 	prev := maxArchiveEntryBytes
 	maxArchiveEntryBytes = 1024 // 1 KB ceiling
@@ -162,6 +175,19 @@ func TestExtractZip_EntryExceedsCapErrorsWithBombMessage(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "decompression bomb") {
 		t.Errorf("error = %q, want it to mention decompression bomb", err.Error())
+	}
+}
+
+func TestExtractZip_RejectsTraversalEntry(t *testing.T) {
+	archive := writeZipWithEntry(t, "../ntm", []byte("hello"))
+	dest := t.TempDir()
+
+	_, err := extractZip(archive, dest)
+	if err == nil {
+		t.Fatal("extractZip returned nil error for traversal entry")
+	}
+	if !strings.Contains(err.Error(), "illegal archive entry path") {
+		t.Fatalf("error = %q, want illegal archive entry path", err.Error())
 	}
 }
 
