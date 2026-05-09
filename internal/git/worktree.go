@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+var (
+	worktreeGitCommandTimeout   = 5 * time.Second
+	worktreeGitCommandWaitDelay = 500 * time.Millisecond
+)
+
 func isAlreadySafeWorktreeKey(value string) bool {
 	if value == "" || value == "." || value == ".." {
 		return false
@@ -372,9 +377,10 @@ func (wm *WorktreeManager) worktreeExists(name string) (bool, error) {
 
 // getCurrentBranch returns the current branch name
 func (wm *WorktreeManager) getCurrentBranch() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), worktreeGitCommandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.WaitDelay = worktreeGitCommandWaitDelay
 	cmd.Dir = wm.baseRepo
 	output, err := cmd.Output()
 	if err != nil {
@@ -385,9 +391,10 @@ func (wm *WorktreeManager) getCurrentBranch() (string, error) {
 
 // getCommitHash returns the current commit hash for a worktree
 func (wm *WorktreeManager) getCommitHash(worktreePath string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), worktreeGitCommandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
+	cmd.WaitDelay = worktreeGitCommandWaitDelay
 	cmd.Dir = worktreePath
 	output, err := cmd.Output()
 	if err != nil {
@@ -401,7 +408,10 @@ func (wm *WorktreeManager) getWorktreeInfo(name string) (*WorktreeInfo, error) {
 	workingDir := filepath.Join(wm.baseRepo, "..", name)
 
 	// Get branch name
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	ctx, cancel := context.WithTimeout(context.Background(), worktreeGitCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.WaitDelay = worktreeGitCommandWaitDelay
 	cmd.Dir = workingDir
 	branchOutput, err := cmd.Output()
 	if err != nil {
