@@ -10,6 +10,13 @@ import (
 	"testing"
 )
 
+func assertStringEqual(t *testing.T, got, want string) {
+	t.Helper()
+	if strings.Compare(got, want) != 0 {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestCASSAdapter_ExtractKeyConcepts(t *testing.T) {
 	t.Parallel()
 
@@ -28,21 +35,13 @@ func TestCASSAdapter_BuildQueries(t *testing.T) {
 
 	a := NewCASSAdapter()
 
-	if got := a.buildRelatedSessionQuery(nil, "sess"); got != "" {
-		t.Fatalf("buildRelatedSessionQuery(nil) = %q, want \"\"", got)
-	}
-	if got := a.buildPatternQuery(nil); got != "" {
-		t.Fatalf("buildPatternQuery(nil) = %q, want \"\"", got)
-	}
+	assertStringEqual(t, a.buildRelatedSessionQuery(nil, "sess"), "")
+	assertStringEqual(t, a.buildPatternQuery(nil), "")
 
 	concepts := []string{"auth", "bug"}
 
-	if got := a.buildRelatedSessionQuery(concepts, "sess"); got != "auth OR bug" {
-		t.Fatalf("buildRelatedSessionQuery() = %q, want %q", got, "auth OR bug")
-	}
-	if got := a.buildPatternQuery(concepts); got != "auth AND bug" {
-		t.Fatalf("buildPatternQuery() = %q, want %q", got, "auth AND bug")
-	}
+	assertStringEqual(t, a.buildRelatedSessionQuery(concepts, "sess"), "auth OR bug")
+	assertStringEqual(t, a.buildPatternQuery(concepts), "auth AND bug")
 }
 
 func TestCASSAdapter_EnhanceAndFilterPassthrough(t *testing.T) {
@@ -51,18 +50,14 @@ func TestCASSAdapter_EnhanceAndFilterPassthrough(t *testing.T) {
 	a := NewCASSAdapter()
 
 	query := "hello world"
-	if got := a.enhanceQueryForContext(query); got != query {
-		t.Fatalf("enhanceQueryForContext() = %q, want %q", got, query)
-	}
+	assertStringEqual(t, a.enhanceQueryForContext(query), query)
 
 	raw := json.RawMessage(`{"hits":[1]}`)
 	out, err := a.filterAndRankForContext(raw, 10)
 	if err != nil {
 		t.Fatalf("filterAndRankForContext() error: %v", err)
 	}
-	if string(out) != string(raw) {
-		t.Fatalf("filterAndRankForContext() = %s, want %s", out, raw)
-	}
+	assertStringEqual(t, string(out), string(raw))
 	if !json.Valid(out) {
 		t.Fatalf("filterAndRankForContext() returned invalid JSON: %s", out)
 	}

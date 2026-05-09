@@ -32,6 +32,20 @@ func setupGitRepo(t *testing.T) string {
 	return tmp
 }
 
+func assertStringEqual(t *testing.T, got, want string) {
+	t.Helper()
+	if strings.Compare(got, want) != 0 {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func assertStringNotEqual(t *testing.T, got, unwanted string) {
+	t.Helper()
+	if strings.Compare(got, unwanted) == 0 {
+		t.Fatalf("got %q, want a distinct value", got)
+	}
+}
+
 func TestIsGitRepository(t *testing.T) {
 	t.Parallel()
 
@@ -71,14 +85,10 @@ func TestCanonicalSessionKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := canonicalSessionKey(tc.in)
-			if got != tc.want {
-				t.Fatalf("canonicalSessionKey(%q) = %q, want %q", tc.in, got, tc.want)
-			}
+			assertStringEqual(t, got, tc.want)
 			if tc.want2 != "" {
 				got2 := canonicalSessionKey(tc.want2)
-				if got == got2 {
-					t.Fatalf("distinct IDs collided: %q and %q both -> %q", tc.in, tc.want2, got)
-				}
+				assertStringNotEqual(t, got, got2)
 			}
 		})
 	}
@@ -102,9 +112,7 @@ func TestCanonicalAgentKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := canonicalAgentKey(tc.in)
-			if got != tc.want {
-				t.Fatalf("canonicalAgentKey(%q) = %q, want %q", tc.in, got, tc.want)
-			}
+			assertStringEqual(t, got, tc.want)
 		})
 	}
 }
@@ -121,15 +129,9 @@ func TestWorktreeManager_ProvisionWorktreeSanitizesAgentName(t *testing.T) {
 		t.Fatalf("ProvisionWorktree: %v", err)
 	}
 
-	if got, want := filepath.Base(info.Path), "agent-evil-type-sess-one"; got != want {
-		t.Fatalf("worktree basename = %q, want %q", got, want)
-	}
-	if info.Branch != "agent/evil-type/sess-one" {
-		t.Fatalf("branch = %q, want sanitized agent and session components", info.Branch)
-	}
-	if info.Agent != "evil-type" {
-		t.Fatalf("Agent = %q, want sanitized agent key", info.Agent)
-	}
+	assertStringEqual(t, filepath.Base(info.Path), "agent-evil-type-sess-one")
+	assertStringEqual(t, info.Branch, "agent/evil-type/sess-one")
+	assertStringEqual(t, info.Agent, "evil-type")
 }
 
 func TestWorktreeManager_worktreeExists(t *testing.T) {
