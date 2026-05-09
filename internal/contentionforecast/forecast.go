@@ -55,10 +55,10 @@ type TouchedPath struct {
 
 // Inputs is the full evidence the forecaster reduces.
 type Inputs struct {
-	Reservations  []ReservationEpisode
-	ClosedBeads   []ClosedBead
-	TouchedPaths  []TouchedPath
-	BeadLabels    map[string][]string
+	Reservations []ReservationEpisode
+	ClosedBeads  []ClosedBead
+	TouchedPaths []TouchedPath
+	BeadLabels   map[string][]string
 
 	// DecayHalfLife controls how fast historical signals lose weight.
 	// Sentinel handling:
@@ -165,8 +165,8 @@ func Compute(in Inputs) Forecast {
 		owners         map[string]int
 		lastAcquiredAt time.Time
 		// label/touch bonuses computed below.
-		labelOverlap   float64
-		touchSignal    float64
+		labelOverlap float64
+		touchSignal  float64
 	}
 	agg := make(map[string]*aggregate)
 	getAgg := func(p string) *aggregate {
@@ -243,10 +243,10 @@ func Compute(in Inputs) Forecast {
 		// doesn't dwarf everything else.
 		freq := squash01(a.decayedWeight)
 		factors := map[string]float64{
-			"frequency":    round3(freq),
-			"conflict_rate": round3(conflictRate),
-			"label_overlap": round3(squash01(a.labelOverlap)),
-			"git_activity":  round3(squash01(a.touchSignal)),
+			"frequency":          round3(freq),
+			"conflict_rate":      round3(conflictRate),
+			"label_overlap":      round3(squash01(a.labelOverlap)),
+			"git_activity":       round3(squash01(a.touchSignal)),
 			"broad_glob_penalty": round3(broadPenalty),
 		}
 		// Weighted combination. Weights chosen so reservation

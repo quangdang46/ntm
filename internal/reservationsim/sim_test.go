@@ -10,8 +10,8 @@ import (
 // stepClock is a tiny mutable Clock for tests.
 type stepClock struct{ now time.Time }
 
-func (c *stepClock) Now() time.Time           { return c.now }
-func (c *stepClock) Advance(d time.Duration)  { c.now = c.now.Add(d) }
+func (c *stepClock) Now() time.Time          { return c.now }
+func (c *stepClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 
 func newClockAt(t time.Time) *stepClock { return &stepClock{now: t} }
 
@@ -312,7 +312,7 @@ func TestPatternsOverlap_GlobMatrix(t *testing.T) {
 		{"**", "foo/bar.go", true},
 		{"**", "deep/nested/file.go", true},
 		{"**", "anyfile.go", true},
-		{"foo/bar.go", "**", true}, // symmetric
+		{"foo/bar.go", "**", true},  // symmetric
 		{"/**", "foo/bar.go", true}, // already worked — pin it
 	}
 	for _, c := range cases {

@@ -67,10 +67,10 @@ type AcquireRequest struct {
 // AcquireResult captures the outcome plus the conflicting lease (if
 // any). Diagnostic is the robot-shaped string surfaces should render.
 type AcquireResult struct {
-	Outcome     Outcome  `json:"outcome"`
-	Lease       *Lease   `json:"lease,omitempty"`
-	Conflict    *Lease   `json:"conflict,omitempty"`
-	Diagnostic  string   `json:"diagnostic,omitempty"`
+	Outcome    Outcome `json:"outcome"`
+	Lease      *Lease  `json:"lease,omitempty"`
+	Conflict   *Lease  `json:"conflict,omitempty"`
+	Diagnostic string  `json:"diagnostic,omitempty"`
 }
 
 // Simulator is the mutable model. Use NewSimulator and pass a Clock
@@ -225,10 +225,10 @@ func (s *Simulator) Active() []Lease {
 // Diagnostics returns the robot-shaped envelope a `--robot-locks`-
 // style surface would render. Stable JSON; deterministic sort.
 type DiagnosticsReport struct {
-	GeneratedAt    time.Time `json:"generated_at"`
-	ActiveCount    int       `json:"active_count"`
-	Leases         []Lease   `json:"leases"`
-	ConflictHints  []string  `json:"conflict_hints,omitempty"`
+	GeneratedAt   time.Time `json:"generated_at"`
+	ActiveCount   int       `json:"active_count"`
+	Leases        []Lease   `json:"leases"`
+	ConflictHints []string  `json:"conflict_hints,omitempty"`
 }
 
 // Diagnostics returns the rendered report for the current state.

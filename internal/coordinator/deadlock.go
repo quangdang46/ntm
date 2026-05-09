@@ -31,13 +31,13 @@ type DeadlockCycle struct {
 // DeadlockReport is the stable robot-readable envelope produced by
 // DetectDeadlocks. It is safe to JSON-encode directly.
 type DeadlockReport struct {
-	Success     bool              `json:"success"`
-	Timestamp   string            `json:"timestamp"`
-	Cycles      []DeadlockCycle   `json:"cycles"`
-	NodeCount   int               `json:"node_count"`
-	EdgeCount   int               `json:"edge_count"`
-	Sources     []SourceStatus    `json:"sources,omitempty"`
-	Warnings    []string          `json:"warnings,omitempty"`
+	Success   bool            `json:"success"`
+	Timestamp string          `json:"timestamp"`
+	Cycles    []DeadlockCycle `json:"cycles"`
+	NodeCount int             `json:"node_count"`
+	EdgeCount int             `json:"edge_count"`
+	Sources   []SourceStatus  `json:"sources,omitempty"`
+	Warnings  []string        `json:"warnings,omitempty"`
 }
 
 // SourceStatus tracks per-source availability so callers know whether

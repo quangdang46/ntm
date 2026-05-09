@@ -244,7 +244,7 @@ func TestPatternCoversPath_CatchAllAndBoundaries(t *testing.T) {
 		// Negative cases that must stay negative.
 		{"internal/auth/**", "internal/billing/x.go", false},
 		{"internal/auth/*", "internal/auth/sub/x.go", false}, // /* is one segment
-		{"", "x.go", false},                                  // empty pattern
+		{"", "x.go", false}, // empty pattern
 	}
 	for _, c := range cases {
 		if got := patternCoversPath(c.pattern, c.path); got != c.want {
