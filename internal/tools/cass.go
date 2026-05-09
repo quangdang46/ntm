@@ -171,15 +171,21 @@ func cassHealthIsHealthy(status string, healthy *bool, cmdErr error) bool {
 		return *healthy
 	}
 
-	switch strings.ToLower(strings.TrimSpace(status)) {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	switch normalized {
 	case "healthy", "ok", "ready":
 		return true
 	case "unhealthy", "degraded", "error", "not_initialized", "not-initialized":
 		return false
 	}
 
-	// Fall back to process-level success if the schema omits `healthy`
-	// and status is unknown.
+	// When `healthy` is absent, fail closed for unknown non-empty status
+	// values so future schema/status additions do not get treated as healthy.
+	if normalized != "" {
+		return false
+	}
+
+	// Empty status + missing healthy falls back to process-level success.
 	return cmdErr == nil
 }
 

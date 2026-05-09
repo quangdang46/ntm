@@ -90,3 +90,21 @@ func TestCASSAdapter_HealthCurrentSchemaWithoutHealthyUsesStatusAndExitCode(t *t
 		t.Fatalf("Health() message = %q, want healthy message", health.Message)
 	}
 }
+
+func TestCASSAdapter_HealthWithoutHealthyUnknownStatusFailsClosed(t *testing.T) {
+	writeFakeCassHealthScript(t,
+		`{"status":"warning","initialized":true}`,
+		"0",
+	)
+
+	health, err := NewCASSAdapter().Health(context.Background())
+	if err != nil {
+		t.Fatalf("Health() error: %v", err)
+	}
+	if health.Healthy {
+		t.Fatalf("Health() Healthy = true, want false for unknown status without healthy field")
+	}
+	if !strings.Contains(health.Message, "cass reports unhealthy: warning") {
+		t.Fatalf("Health() message = %q, want warning unhealthy message", health.Message)
+	}
+}
