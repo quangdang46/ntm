@@ -99,14 +99,38 @@ func (c *SessionCoordinator) GenerateDigest() DigestSummary {
 	// (PaneIndex alone can collide across windows), alphabetical
 	// for Alerts.
 	sort.Slice(digest.AgentStatuses, func(i, j int) bool {
-		switch byPaneIndex := cmp.Compare(digest.AgentStatuses[i].PaneIndex, digest.AgentStatuses[j].PaneIndex); {
+		ai := digest.AgentStatuses[i]
+		aj := digest.AgentStatuses[j]
+
+		switch byPaneIndex := cmp.Compare(ai.PaneIndex, aj.PaneIndex); {
 		case byPaneIndex < 0:
 			return true
 		case byPaneIndex > 0:
 			return false
-		default:
-			return strings.Compare(digest.AgentStatuses[i].PaneID, digest.AgentStatuses[j].PaneID) < 0
 		}
+
+		if byPaneID := strings.Compare(ai.PaneID, aj.PaneID); byPaneID != 0 {
+			return byPaneID < 0
+		}
+		if byAgentType := strings.Compare(ai.AgentType, aj.AgentType); byAgentType != 0 {
+			return byAgentType < 0
+		}
+		if byStatus := strings.Compare(ai.Status, aj.Status); byStatus != 0 {
+			return byStatus < 0
+		}
+		switch byContext := cmp.Compare(ai.ContextUsage, aj.ContextUsage); {
+		case byContext < 0:
+			return true
+		case byContext > 0:
+			return false
+		}
+		if byIdle := strings.Compare(ai.IdleFor, aj.IdleFor); byIdle != 0 {
+			return byIdle < 0
+		}
+		if byTask := strings.Compare(ai.Task, aj.Task); byTask != 0 {
+			return byTask < 0
+		}
+		return false
 	})
 	sort.Strings(digest.Alerts)
 

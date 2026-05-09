@@ -907,3 +907,49 @@ func TestGenerateDigest_StableOrderingAcrossCalls_PaneIndexCollision(t *testing.
 		}
 	}
 }
+
+// bd-usgd8: pane index collisions were sorted by PaneID tie-breaker, but if
+// PaneID is empty/non-unique the comparator treated distinct entries as equal
+// and preserved map-iteration drift. Keep ordering byte-stable with additional
+// tie-breakers.
+func TestGenerateDigest_StableOrderingAcrossCalls_EmptyPaneIDCollision(t *testing.T) {
+	c := New("s", "/tmp/test", nil, "Agent")
+	c.mu.Lock()
+	for paneKey, payload := range map[string]struct {
+		index int
+		typ   string
+		stat  robot.AgentState
+		ctx   float64
+		task  string
+	}{
+		"%a": {index: 0, typ: "gmi", stat: robot.StateError, ctx: 80, task: "x"},
+		"%b": {index: 0, typ: "cc", stat: robot.StateWaiting, ctx: 60, task: "y"},
+		"%c": {index: 1, typ: "cod", stat: robot.StateGenerating, ctx: 40, task: "z"},
+		"%d": {index: 1, typ: "cc", stat: robot.StateWaiting, ctx: 20, task: "w"},
+	} {
+		c.agents[paneKey] = &AgentState{
+			PaneID:       "", // force collision on legacy tie-break key
+			PaneIndex:    payload.index,
+			AgentType:    payload.typ,
+			Status:       payload.stat,
+			ContextUsage: payload.ctx,
+			CurrentTask:  payload.task,
+		}
+	}
+	c.mu.Unlock()
+
+	const iterations = 60
+	var prev string
+	for i := 0; i < iterations; i++ {
+		d := c.GenerateDigest()
+		b, _ := json.Marshal(d.AgentStatuses)
+		current := string(b)
+		if i == 0 {
+			prev = current
+			continue
+		}
+		if current != prev {
+			t.Fatalf("digest drifted on call %d:\nprev: %s\nnow:  %s", i, prev, current)
+		}
+	}
+}
