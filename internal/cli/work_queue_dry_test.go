@@ -320,6 +320,9 @@ func TestCollectQueueDryReservationsSkipsHealthPreflight(t *testing.T) {
 	if got.Status != "available" {
 		t.Fatalf("status=%q, want available", got.Status)
 	}
+	if got.Coordination == nil || got.Coordination.Status != "verified" || got.Coordination.MutationBlocked {
+		t.Fatalf("coordination=%+v, want verified and mutation allowed", got.Coordination)
+	}
 }
 
 func TestCollectQueueDryReservationsTimeoutHealthOkExplainsSplit(t *testing.T) {
@@ -371,6 +374,12 @@ func TestCollectQueueDryReservationsTimeoutHealthOkExplainsSplit(t *testing.T) {
 	if strings.Compare(got.RecoveryMode, "corrupt") != 0 || !strings.Contains(got.RecoveryNextAction, "doctor repair") {
 		t.Fatalf("recovery fields=%+v, want corrupt recovery guidance", got)
 	}
+	if got.Coordination == nil || !got.Coordination.ReadOnlySafe || !got.Coordination.MutationBlocked {
+		t.Fatalf("coordination=%+v, want read-only safe diagnostics with mutation blocked", got.Coordination)
+	}
+	if !strings.Contains(got.Coordination.Remediation, "doctor repair") {
+		t.Fatalf("remediation=%q, want recovery next action", got.Coordination.Remediation)
+	}
 	for _, want := range []string{"reservation lookup failed", "status=ok", "recovery mode=corrupt"} {
 		if !containsWarning(got.Diagnostics, want) {
 			t.Fatalf("diagnostics=%v, want %q", got.Diagnostics, want)
@@ -380,7 +389,7 @@ func TestCollectQueueDryReservationsTimeoutHealthOkExplainsSplit(t *testing.T) {
 	report := QueueDryResponse{Evidence: QueueDryEvidence{Reservations: got}}
 	appendQueueDryReservationWarning(&report)
 	warning := strings.Join(report.Warnings, "\n")
-	for _, want := range []string{"status=lookup_timeout_health_ok", "health_check=reachable", "health_status=ok", "health_level=green", "recovery_mode=corrupt"} {
+	for _, want := range []string{"status=lookup_timeout_health_ok", "health_check=reachable", "health_status=ok", "health_level=green", "recovery_mode=corrupt", "mutation_blocked=true"} {
 		if !strings.Contains(warning, want) {
 			t.Fatalf("warning=%q, want %q", warning, want)
 		}
@@ -416,6 +425,12 @@ func TestCollectQueueDryReservationsServerUnavailableHealthFails(t *testing.T) {
 	}
 	if got.HealthReachable {
 		t.Fatalf("HealthReachable=true, want false")
+	}
+	if got.Coordination == nil || !got.Coordination.MutationBlocked {
+		t.Fatalf("coordination=%+v, want mutation blocked when server is unavailable", got.Coordination)
+	}
+	if !strings.Contains(got.Coordination.Remediation, "start or restart Agent Mail") {
+		t.Fatalf("remediation=%q, want restart guidance", got.Coordination.Remediation)
 	}
 	if !containsWarning(got.Diagnostics, "health_check failed") {
 		t.Fatalf("diagnostics=%v, want health failure", got.Diagnostics)
@@ -890,6 +905,142 @@ func TestAppendCommitReadyFindingMarksCriticalUnsafe(t *testing.T) {
 	}
 	if len(report.Errors) != 1 {
 		t.Fatalf("Errors=%v, want one critical status", report.Errors)
+	}
+}
+
+func TestCollectCommitReadyReservationsHealthyCoordination(t *testing.T) {
+	oldNewClient := queueDryNewAgentMailClient
+	oldFetchReservations := queueDryFetchActiveReservations
+	oldHealthCheck := queueDryAgentMailHealthCheck
+	t.Cleanup(func() {
+		queueDryNewAgentMailClient = oldNewClient
+		queueDryFetchActiveReservations = oldFetchReservations
+		queueDryAgentMailHealthCheck = oldHealthCheck
+	})
+
+	now := time.Now().UTC()
+	queueDryNewAgentMailClient = func(projectDir string) *agentmail.Client {
+		if projectDir != "/repo" {
+			t.Fatalf("projectDir=%q, want /repo", projectDir)
+		}
+		return agentmail.NewClient(agentmail.WithBaseURL("http://127.0.0.1:1/"))
+	}
+	queueDryFetchActiveReservations = func(ctx context.Context, client *agentmail.Client, projectKey, agentName string, allAgents bool) ([]agentmail.FileReservation, error) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("reservation lookup should have a deadline")
+		}
+		if projectKey != "/repo" || agentName != "" || !allAgents {
+			t.Fatalf("lookup args project=%q agent=%q allAgents=%v", projectKey, agentName, allAgents)
+		}
+		return []agentmail.FileReservation{{
+			ID:          7,
+			PathPattern: "internal/cli/work.go",
+			AgentName:   "TopazDeer",
+			Exclusive:   true,
+			CreatedTS:   agentmail.FlexTime{Time: now},
+			ExpiresTS:   agentmail.FlexTime{Time: now.Add(time.Hour)},
+		}}, nil
+	}
+	queueDryAgentMailHealthCheck = func(context.Context, *agentmail.Client) (*agentmail.HealthStatus, error) {
+		t.Fatal("health check should not run after successful reservation lookup")
+		return nil, nil
+	}
+
+	views, evidence := collectCommitReadyReservations("/repo", true)
+	if len(views) != 1 || views[0].AgentName != "TopazDeer" {
+		t.Fatalf("views=%+v, want TopazDeer reservation", views)
+	}
+	if !evidence.Available || evidence.Count != 1 || evidence.Status != "available" {
+		t.Fatalf("evidence=%+v, want available reservation evidence", evidence)
+	}
+	if evidence.Coordination == nil || evidence.Coordination.Status != "verified" || evidence.Coordination.MutationBlocked {
+		t.Fatalf("coordination=%+v, want verified and mutation allowed", evidence.Coordination)
+	}
+}
+
+func TestCollectCommitReadyReservationsTimeoutBlocksMutation(t *testing.T) {
+	oldNewClient := queueDryNewAgentMailClient
+	oldFetchReservations := queueDryFetchActiveReservations
+	oldHealthCheck := queueDryAgentMailHealthCheck
+	t.Cleanup(func() {
+		queueDryNewAgentMailClient = oldNewClient
+		queueDryFetchActiveReservations = oldFetchReservations
+		queueDryAgentMailHealthCheck = oldHealthCheck
+	})
+
+	queueDryNewAgentMailClient = func(string) *agentmail.Client {
+		return agentmail.NewClient(agentmail.WithBaseURL("http://127.0.0.1:1/"))
+	}
+	queueDryFetchActiveReservations = func(context.Context, *agentmail.Client, string, string, bool) ([]agentmail.FileReservation, error) {
+		return nil, errors.New("listing reservations: resources/read failed: request timed out")
+	}
+	queueDryAgentMailHealthCheck = func(context.Context, *agentmail.Client) (*agentmail.HealthStatus, error) {
+		return &agentmail.HealthStatus{
+			Status:      "ok",
+			HealthLevel: "green",
+			Recovery: &agentmail.RecoveryStatus{
+				Mode:       "degraded_read_only",
+				NextAction: "Run `am doctor repair`",
+			},
+		}, nil
+	}
+
+	views, evidence := collectCommitReadyReservations("/repo", true)
+	if len(views) != 0 {
+		t.Fatalf("views=%+v, want none on lookup failure", views)
+	}
+	if evidence.Available || evidence.Status != "lookup_timeout_health_ok" {
+		t.Fatalf("evidence=%+v, want unavailable timeout with health reachable", evidence)
+	}
+	if evidence.Coordination == nil || !evidence.Coordination.ReadOnlySafe || !evidence.Coordination.MutationBlocked {
+		t.Fatalf("coordination=%+v, want read-only diagnostics with mutation blocked", evidence.Coordination)
+	}
+	if !strings.Contains(evidence.Coordination.Remediation, "am doctor repair") {
+		t.Fatalf("remediation=%q, want recovery guidance", evidence.Coordination.Remediation)
+	}
+}
+
+func TestCollectCommitReadyMailUnavailableBlocksMutation(t *testing.T) {
+	oldNewClient := queueDryNewAgentMailClient
+	oldHealthCheck := queueDryAgentMailHealthCheck
+	oldFetchInbox := commitReadyFetchInbox
+	t.Cleanup(func() {
+		queueDryNewAgentMailClient = oldNewClient
+		queueDryAgentMailHealthCheck = oldHealthCheck
+		commitReadyFetchInbox = oldFetchInbox
+	})
+
+	queueDryNewAgentMailClient = func(string) *agentmail.Client {
+		return agentmail.NewClient(agentmail.WithBaseURL("http://127.0.0.1:1/"))
+	}
+	commitReadyFetchInbox = func(ctx context.Context, client *agentmail.Client, opts agentmail.FetchInboxOptions) ([]agentmail.InboxMessage, error) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("inbox lookup should have a deadline")
+		}
+		if opts.ProjectKey != "/repo" || opts.AgentName != "TopazDeer" || !opts.UrgentOnly {
+			t.Fatalf("opts=%+v, want urgent inbox check for TopazDeer", opts)
+		}
+		return nil, errors.New("fetch_inbox: connection refused")
+	}
+	queueDryAgentMailHealthCheck = func(context.Context, *agentmail.Client) (*agentmail.HealthStatus, error) {
+		return nil, errors.New("health_check: connection refused")
+	}
+
+	views, evidence := collectCommitReadyMail("/repo", "TopazDeer")
+	if len(views) != 0 {
+		t.Fatalf("views=%+v, want none on inbox failure", views)
+	}
+	if evidence.Available || evidence.Agent != "TopazDeer" {
+		t.Fatalf("evidence=%+v, want unavailable TopazDeer evidence", evidence)
+	}
+	if evidence.Coordination == nil || !evidence.Coordination.ReadOnlySafe || !evidence.Coordination.MutationBlocked {
+		t.Fatalf("coordination=%+v, want read-only diagnostics with mutation blocked", evidence.Coordination)
+	}
+	if !strings.Contains(evidence.Coordination.Remediation, "start or restart Agent Mail") {
+		t.Fatalf("remediation=%q, want restart guidance", evidence.Coordination.Remediation)
+	}
+	if !containsWarning(evidence.Diagnostics, "health_check failed") {
+		t.Fatalf("diagnostics=%v, want health_check failure", evidence.Diagnostics)
 	}
 }
 

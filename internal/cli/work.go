@@ -920,17 +920,28 @@ type QueueDrySyncStatus struct {
 
 // QueueDryReservations reports active reservation metadata.
 type QueueDryReservations struct {
-	Available          bool     `json:"available"`
-	Count              int      `json:"count"`
-	Holders            []string `json:"holders,omitempty"`
-	Status             string   `json:"status,omitempty"`
-	Error              string   `json:"error,omitempty"`
-	HealthReachable    bool     `json:"health_reachable,omitempty"`
-	HealthStatus       string   `json:"health_status,omitempty"`
-	HealthLevel        string   `json:"health_level,omitempty"`
-	RecoveryMode       string   `json:"recovery_mode,omitempty"`
-	RecoveryNextAction string   `json:"recovery_next_action,omitempty"`
-	Diagnostics        []string `json:"diagnostics,omitempty"`
+	Available          bool                        `json:"available"`
+	Count              int                         `json:"count"`
+	Holders            []string                    `json:"holders,omitempty"`
+	Status             string                      `json:"status,omitempty"`
+	Error              string                      `json:"error,omitempty"`
+	HealthReachable    bool                        `json:"health_reachable,omitempty"`
+	HealthStatus       string                      `json:"health_status,omitempty"`
+	HealthLevel        string                      `json:"health_level,omitempty"`
+	RecoveryMode       string                      `json:"recovery_mode,omitempty"`
+	RecoveryNextAction string                      `json:"recovery_next_action,omitempty"`
+	Coordination       *AgentMailCoordinationState `json:"coordination,omitempty"`
+	Diagnostics        []string                    `json:"diagnostics,omitempty"`
+}
+
+// AgentMailCoordinationState explains whether Agent Mail evidence is usable for
+// read-only diagnostics and whether mutation should be blocked until verified.
+type AgentMailCoordinationState struct {
+	Status          string `json:"status"`
+	ReadOnlySafe    bool   `json:"read_only_safe"`
+	MutationBlocked bool   `json:"mutation_blocked"`
+	Reason          string `json:"reason,omitempty"`
+	Remediation     string `json:"remediation,omitempty"`
 }
 
 // QueueDryCommit stores a compact git commit for operator context.
@@ -991,20 +1002,35 @@ type CommitReadyGitEvidence struct {
 
 // CommitReadyReservationEvidence reports whether changed files are reservation-covered.
 type CommitReadyReservationEvidence struct {
-	Available bool     `json:"available"`
-	Count     int      `json:"count"`
-	Holders   []string `json:"holders,omitempty"`
-	Error     string   `json:"error,omitempty"`
+	Available          bool                        `json:"available"`
+	Count              int                         `json:"count"`
+	Holders            []string                    `json:"holders,omitempty"`
+	Status             string                      `json:"status,omitempty"`
+	Error              string                      `json:"error,omitempty"`
+	HealthReachable    bool                        `json:"health_reachable,omitempty"`
+	HealthStatus       string                      `json:"health_status,omitempty"`
+	HealthLevel        string                      `json:"health_level,omitempty"`
+	RecoveryMode       string                      `json:"recovery_mode,omitempty"`
+	RecoveryNextAction string                      `json:"recovery_next_action,omitempty"`
+	Coordination       *AgentMailCoordinationState `json:"coordination,omitempty"`
+	Diagnostics        []string                    `json:"diagnostics,omitempty"`
 }
 
 // CommitReadyMailEvidence summarizes urgent or acknowledgement-required inbox state.
 type CommitReadyMailEvidence struct {
-	Available        bool   `json:"available"`
-	Agent            string `json:"agent,omitempty"`
-	CheckedCount     int    `json:"checked_count"`
-	UrgentCount      int    `json:"urgent_count"`
-	AckRequiredCount int    `json:"ack_required_count"`
-	Error            string `json:"error,omitempty"`
+	Available          bool                        `json:"available"`
+	Agent              string                      `json:"agent,omitempty"`
+	CheckedCount       int                         `json:"checked_count"`
+	UrgentCount        int                         `json:"urgent_count"`
+	AckRequiredCount   int                         `json:"ack_required_count"`
+	Error              string                      `json:"error,omitempty"`
+	HealthReachable    bool                        `json:"health_reachable,omitempty"`
+	HealthStatus       string                      `json:"health_status,omitempty"`
+	HealthLevel        string                      `json:"health_level,omitempty"`
+	RecoveryMode       string                      `json:"recovery_mode,omitempty"`
+	RecoveryNextAction string                      `json:"recovery_next_action,omitempty"`
+	Coordination       *AgentMailCoordinationState `json:"coordination,omitempty"`
+	Diagnostics        []string                    `json:"diagnostics,omitempty"`
 }
 
 const (
@@ -1029,6 +1055,10 @@ var queueDryFetchActiveReservations = fetchActiveReservations
 
 var queueDryAgentMailHealthCheck = func(ctx context.Context, client *agentmail.Client) (*agentmail.HealthStatus, error) {
 	return client.HealthCheck(ctx)
+}
+
+var commitReadyFetchInbox = func(ctx context.Context, client *agentmail.Client, opts agentmail.FetchInboxOptions) ([]agentmail.InboxMessage, error) {
+	return client.FetchInbox(ctx, opts)
 }
 
 func runWorkCommitReady(format string, agentName string, syncLagMinutes int) error {
@@ -1116,20 +1146,22 @@ func collectCommitReadyReport(dir string, agentName string, now time.Time, syncL
 		})
 	}
 	if reservationsEvidence.Error != "" && (len(report.Evidence.Git.ChangedFiles) > 0 || agentName != "") {
+		remediation := commitReadyCoordinationRemediation(reservationsEvidence.Coordination, "retry after Agent Mail recovers, or verify reservations manually before committing")
 		appendCommitReadyFinding(&report, commitlint.Finding{
 			Code:        "agent_mail_unavailable",
 			Severity:    commitlint.SeverityCritical,
 			Summary:     "Agent Mail reservations could not be verified",
-			Remediation: "retry after Agent Mail recovers, or verify reservations manually before committing",
+			Remediation: remediation,
 			Evidence:    evidenceList(reservationsEvidence.Error),
 		})
 	}
 	if mailEvidence.Error != "" && agentName != "" && !commitReadyHasFindingCode(report.Findings, "agent_mail_unavailable") {
+		remediation := commitReadyCoordinationRemediation(mailEvidence.Coordination, "retry after Agent Mail recovers, or inspect urgent/ack-required mail manually")
 		appendCommitReadyFinding(&report, commitlint.Finding{
 			Code:        "agent_mail_unavailable",
 			Severity:    commitlint.SeverityCritical,
 			Summary:     "Agent Mail inbox could not be checked",
-			Remediation: "retry after Agent Mail recovers, or inspect urgent/ack-required mail manually",
+			Remediation: remediation,
 			Evidence:    evidenceList(mailEvidence.Error),
 		})
 	}
@@ -1161,23 +1193,20 @@ func collectCommitReadyReservations(projectDir string, needed bool) ([]commitlin
 	if !needed {
 		return nil, evidence
 	}
-	client := newAgentMailClient(projectDir)
-	if !client.IsAvailable() {
-		evidence.Error = "Agent Mail server unavailable"
-		return nil, evidence
-	}
+	client := queueDryNewAgentMailClient(projectDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), queueDryReservationTimeout)
 	defer cancel()
 
-	reservations, err := fetchActiveReservations(ctx, client, projectDir, "", true)
+	reservations, err := queueDryFetchActiveReservations(ctx, client, projectDir, "", true)
 	if err != nil {
-		evidence.Error = err.Error()
-		return nil, evidence
+		return nil, commitReadyReservationEvidenceFromQueueDry(collectQueueDryReservationFailure(client, err))
 	}
 
 	evidence.Available = true
 	evidence.Count = len(reservations)
+	evidence.Status = "available"
+	evidence.Coordination = agentMailCoordinationAvailable()
 	holderSet := make(map[string]struct{})
 	views := make([]commitlint.ReservationView, 0, len(reservations))
 	for _, r := range reservations {
@@ -1208,16 +1237,12 @@ func collectCommitReadyMail(projectDir string, agentName string) ([]commitlint.I
 		return nil, evidence
 	}
 
-	client := newAgentMailClient(projectDir)
-	if !client.IsAvailable() {
-		evidence.Error = "Agent Mail server unavailable"
-		return nil, evidence
-	}
+	client := queueDryNewAgentMailClient(projectDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), queueDryReservationTimeout)
 	defer cancel()
 
-	messages, err := client.FetchInbox(ctx, agentmail.FetchInboxOptions{
+	messages, err := commitReadyFetchInbox(ctx, client, agentmail.FetchInboxOptions{
 		ProjectKey:    projectDir,
 		AgentName:     agentName,
 		UrgentOnly:    true,
@@ -1226,10 +1251,16 @@ func collectCommitReadyMail(projectDir string, agentName string) ([]commitlint.I
 	})
 	if err != nil {
 		evidence.Error = err.Error()
+		applyAgentMailHealthToMailEvidence(client, &evidence)
+		evidence.Coordination = agentMailCoordinationBlocked(
+			"Agent Mail inbox state could not be verified",
+			agentMailCoordinationRemediation(evidence.RecoveryNextAction, classifyQueueDryReservationError(err), true),
+		)
 		return nil, evidence
 	}
 
 	evidence.Available = true
+	evidence.Coordination = agentMailCoordinationAvailable()
 	evidence.CheckedCount = len(messages)
 	views := make([]commitlint.InboxView, 0, len(messages))
 	for _, msg := range messages {
@@ -1255,6 +1286,96 @@ func collectCommitReadyMail(projectDir string, agentName string) ([]commitlint.I
 		})
 	}
 	return views, evidence
+}
+
+func agentMailCoordinationAvailable() *AgentMailCoordinationState {
+	return &AgentMailCoordinationState{
+		Status:          "verified",
+		ReadOnlySafe:    true,
+		MutationBlocked: false,
+		Reason:          "Agent Mail coordination state was verified",
+	}
+}
+
+func agentMailCoordinationBlocked(reason, remediation string) *AgentMailCoordinationState {
+	return &AgentMailCoordinationState{
+		Status:          "coordination_unknown",
+		ReadOnlySafe:    true,
+		MutationBlocked: true,
+		Reason:          strings.TrimSpace(reason),
+		Remediation:     strings.TrimSpace(remediation),
+	}
+}
+
+func commitReadyCoordinationRemediation(coordination *AgentMailCoordinationState, fallback string) string {
+	if coordination != nil && strings.TrimSpace(coordination.Remediation) != "" {
+		return strings.TrimSpace(coordination.Remediation)
+	}
+	return fallback
+}
+
+func commitReadyReservationEvidenceFromQueueDry(reservations QueueDryReservations) CommitReadyReservationEvidence {
+	return CommitReadyReservationEvidence(reservations)
+}
+
+func applyAgentMailHealthToMailEvidence(client *agentmail.Client, evidence *CommitReadyMailEvidence) {
+	if evidence == nil {
+		return
+	}
+	errText := strings.TrimSpace(evidence.Error)
+	if errText == "" {
+		errText = "unknown error"
+	}
+	evidence.Diagnostics = []string{"inbox lookup failed: " + errText}
+
+	ctx, cancel := context.WithTimeout(context.Background(), queueDryReservationHealthTimeout)
+	defer cancel()
+	health, healthErr := queueDryAgentMailHealthCheck(ctx, client)
+	if healthErr != nil {
+		evidence.Diagnostics = append(evidence.Diagnostics, "health_check failed: "+strings.TrimSpace(healthErr.Error()))
+		return
+	}
+
+	evidence.HealthReachable = true
+	evidence.HealthStatus = strings.TrimSpace(health.Status)
+	evidence.HealthLevel = strings.TrimSpace(health.HealthLevel)
+	if evidence.HealthStatus != "" || evidence.HealthLevel != "" {
+		evidence.Diagnostics = append(evidence.Diagnostics, "health_check "+strings.Join(queueDryKeyValues(map[string]string{
+			"status":       evidence.HealthStatus,
+			"health_level": evidence.HealthLevel,
+		}), " "))
+	}
+	if health.Recovery != nil {
+		evidence.RecoveryMode = strings.TrimSpace(health.Recovery.Mode)
+		evidence.RecoveryNextAction = strings.TrimSpace(health.Recovery.NextAction)
+		if evidence.RecoveryMode != "" || evidence.RecoveryNextAction != "" {
+			evidence.Diagnostics = append(evidence.Diagnostics, "recovery "+strings.Join(queueDryKeyValues(map[string]string{
+				"mode":        evidence.RecoveryMode,
+				"next_action": evidence.RecoveryNextAction,
+			}), " "))
+		}
+	}
+}
+
+func agentMailCoordinationRemediation(recoveryNextAction, status string, includeInbox bool) string {
+	recoveryNextAction = strings.TrimSpace(recoveryNextAction)
+	if recoveryNextAction != "" {
+		return recoveryNextAction + "; then rerun ntm work commit-ready --format=json before mutating Beads or committing"
+	}
+
+	manualCheck := "manually inspect active reservations"
+	if includeInbox {
+		manualCheck = "manually inspect active reservations and urgent or ack-required inbox messages"
+	}
+
+	switch strings.TrimSpace(status) {
+	case "server_unavailable":
+		return "start or restart Agent Mail, then rerun ntm work commit-ready --format=json; if Agent Mail cannot recover, " + manualCheck + " and document the override before mutating Beads or committing"
+	case "lookup_timeout", "resource_read_failed":
+		return "retry after Agent Mail coordination reads recover; if work is urgent, " + manualCheck + " and document the override before mutating Beads or committing"
+	default:
+		return "restore Agent Mail coordination visibility, then rerun ntm work commit-ready --format=json before mutating Beads or committing"
+	}
 }
 
 func commitReadySyncView(status QueueDrySyncStatus) commitlint.SyncView {
@@ -1802,10 +1923,11 @@ func collectQueueDryReservations(projectDir string) QueueDryReservations {
 	sort.Strings(holders)
 
 	return QueueDryReservations{
-		Available: true,
-		Count:     len(reservations),
-		Holders:   holders,
-		Status:    "available",
+		Available:    true,
+		Count:        len(reservations),
+		Holders:      holders,
+		Status:       "available",
+		Coordination: agentMailCoordinationAvailable(),
 	}
 }
 
@@ -1824,6 +1946,10 @@ func collectQueueDryReservationFailure(client *agentmail.Client, lookupErr error
 	health, healthErr := queueDryAgentMailHealthCheck(ctx, client)
 	if healthErr != nil {
 		out.Diagnostics = append(out.Diagnostics, "health_check failed: "+strings.TrimSpace(healthErr.Error()))
+		out.Coordination = agentMailCoordinationBlocked(
+			"Agent Mail reservation state could not be verified",
+			agentMailCoordinationRemediation(out.RecoveryNextAction, out.Status, false),
+		)
 		return out
 	}
 
@@ -1849,6 +1975,10 @@ func collectQueueDryReservationFailure(client *agentmail.Client, lookupErr error
 	if out.HealthReachable {
 		out.Status = status + "_health_ok"
 	}
+	out.Coordination = agentMailCoordinationBlocked(
+		"Agent Mail reservation state could not be verified",
+		agentMailCoordinationRemediation(out.RecoveryNextAction, status, false),
+	)
 	return out
 }
 
@@ -1909,6 +2039,13 @@ func appendQueueDryReservationWarning(report *QueueDryResponse) {
 	}
 	if mode := strings.TrimSpace(report.Evidence.Reservations.RecoveryMode); mode != "" {
 		parts = append(parts, "recovery_mode="+mode)
+	}
+	if coordination := report.Evidence.Reservations.Coordination; coordination != nil {
+		if status := strings.TrimSpace(coordination.Status); status != "" {
+			parts = append(parts, "coordination_status="+status)
+		}
+		parts = append(parts, fmt.Sprintf("read_only_safe=%t", coordination.ReadOnlySafe))
+		parts = append(parts, fmt.Sprintf("mutation_blocked=%t", coordination.MutationBlocked))
 	}
 	report.Warnings = append(report.Warnings, strings.Join(parts, " "))
 }
@@ -2061,11 +2198,23 @@ func renderCommitReady(report CommitReadyResponse) error {
 	} else if report.Evidence.Reservations.Error != "" {
 		fmt.Printf("  Reservations: %s\n", warnStyle.Render(report.Evidence.Reservations.Error))
 	}
+	if coordination := report.Evidence.Reservations.Coordination; coordination != nil {
+		fmt.Printf("    Coordination: %s read_only_safe=%t mutation_blocked=%t\n", coordination.Status, coordination.ReadOnlySafe, coordination.MutationBlocked)
+		if coordination.Remediation != "" {
+			fmt.Printf("    Next: %s\n", coordination.Remediation)
+		}
+	}
 
 	if report.Evidence.Mail.Available {
 		fmt.Printf("  Agent Mail: checked=%d urgent=%d ack_required=%d\n", report.Evidence.Mail.CheckedCount, report.Evidence.Mail.UrgentCount, report.Evidence.Mail.AckRequiredCount)
 	} else if report.Evidence.Mail.Error != "" {
 		fmt.Printf("  Agent Mail: %s\n", warnStyle.Render(report.Evidence.Mail.Error))
+	}
+	if coordination := report.Evidence.Mail.Coordination; coordination != nil {
+		fmt.Printf("    Agent Mail coordination: %s read_only_safe=%t mutation_blocked=%t\n", coordination.Status, coordination.ReadOnlySafe, coordination.MutationBlocked)
+		if coordination.Remediation != "" {
+			fmt.Printf("    Next: %s\n", coordination.Remediation)
+		}
 	}
 
 	if len(report.Findings) > 0 {
@@ -2152,6 +2301,12 @@ func renderQueueDry(report QueueDryResponse) error {
 		fmt.Printf("  Active reservations: %d\n", report.Evidence.Reservations.Count)
 	} else {
 		fmt.Printf("  Active reservations: unavailable (%s)\n", report.Evidence.Reservations.Error)
+	}
+	if coordination := report.Evidence.Reservations.Coordination; coordination != nil {
+		fmt.Printf("  Coordination: %s read_only_safe=%t mutation_blocked=%t\n", coordination.Status, coordination.ReadOnlySafe, coordination.MutationBlocked)
+		if coordination.Remediation != "" {
+			fmt.Printf("    Next: %s\n", coordination.Remediation)
+		}
 	}
 
 	if len(report.Evidence.StaleInProgress) > 0 {
@@ -2257,6 +2412,12 @@ func queueDryMarkdown(report QueueDryResponse) string {
 	fmt.Fprintf(&b, "- In progress: %d\n", report.Evidence.InProgressCount)
 	if report.Quiescence.State != "" {
 		fmt.Fprintf(&b, "- Quiescence: `%s` (safe_to_stand_down=%t)\n", report.Quiescence.State, report.Quiescence.SafeToStandDown)
+	}
+	if coordination := report.Evidence.Reservations.Coordination; coordination != nil {
+		fmt.Fprintf(&b, "- Coordination: `%s` (read_only_safe=%t mutation_blocked=%t)\n", coordination.Status, coordination.ReadOnlySafe, coordination.MutationBlocked)
+		if coordination.Remediation != "" {
+			fmt.Fprintf(&b, "- Coordination next action: %s\n", coordination.Remediation)
+		}
 	}
 	if len(report.Recommendations) > 0 {
 		b.WriteString("\n## Recommended Next Steps\n")
