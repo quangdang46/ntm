@@ -636,6 +636,113 @@ func TestJobQueue_Enqueue_Update(t *testing.T) {
 	}
 }
 
+// bd-m0n8c: pre-fix, an Enqueue that updated an existing job-ID with a
+// changed Priority/Type/SessionName/BatchID left the old buckets'
+// counts dangling and never bumped the new bucket. Stats() then
+// reported the wrong distribution; CountBySession / CountByBatch
+// returned phantom counts. Same family as bd-o35sn (Stats drift on
+// Dequeue/Cancel) and bd-s8sex (cross-axis drift on Cancel).
+func TestJobQueue_Enqueue_Update_RebucketsStats(t *testing.T) {
+	t.Parallel()
+
+	t.Run("priority change", func(t *testing.T) {
+		t.Parallel()
+		q := NewJobQueue()
+		j1 := NewSpawnJob("j1", JobTypeSession, "s")
+		j1.Priority = PriorityNormal
+		q.Enqueue(j1)
+
+		j1u := NewSpawnJob("j1", JobTypeSession, "s")
+		j1u.Priority = PriorityUrgent
+		q.Enqueue(j1u)
+
+		stats := q.Stats()
+		if got := stats.ByPriority[PriorityUrgent]; got != 1 {
+			t.Errorf("ByPriority[Urgent] = %d, want 1", got)
+		}
+		if _, present := stats.ByPriority[PriorityNormal]; present {
+			t.Errorf("ByPriority[Normal] should be deleted (drift), got = %v", stats.ByPriority)
+		}
+		if stats.CurrentSize != 1 {
+			t.Errorf("CurrentSize = %d, want 1", stats.CurrentSize)
+		}
+	})
+
+	t.Run("type change", func(t *testing.T) {
+		t.Parallel()
+		q := NewJobQueue()
+		j1 := NewSpawnJob("j1", JobTypeSession, "s")
+		q.Enqueue(j1)
+
+		j1u := NewSpawnJob("j1", JobTypePaneSplit, "s")
+		q.Enqueue(j1u)
+
+		stats := q.Stats()
+		if got := stats.ByType[JobTypePaneSplit]; got != 1 {
+			t.Errorf("ByType[PaneSplit] = %d, want 1", got)
+		}
+		if _, present := stats.ByType[JobTypeSession]; present {
+			t.Errorf("ByType[Session] should be deleted (drift), got = %v", stats.ByType)
+		}
+	})
+
+	t.Run("session name change", func(t *testing.T) {
+		t.Parallel()
+		q := NewJobQueue()
+		j1 := NewSpawnJob("j1", JobTypeSession, "s1")
+		q.Enqueue(j1)
+
+		j1u := NewSpawnJob("j1", JobTypeSession, "s2")
+		q.Enqueue(j1u)
+
+		if got := q.CountBySession("s2"); got != 1 {
+			t.Errorf("CountBySession(s2) = %d, want 1", got)
+		}
+		if got := q.CountBySession("s1"); got != 0 {
+			t.Errorf("CountBySession(s1) = %d, want 0 (phantom drift)", got)
+		}
+	})
+
+	t.Run("batch id change", func(t *testing.T) {
+		t.Parallel()
+		q := NewJobQueue()
+		j1 := NewSpawnJob("j1", JobTypeSession, "s")
+		j1.BatchID = "b1"
+		q.Enqueue(j1)
+
+		j1u := NewSpawnJob("j1", JobTypeSession, "s")
+		j1u.BatchID = "b2"
+		q.Enqueue(j1u)
+
+		if got := q.CountByBatch("b2"); got != 1 {
+			t.Errorf("CountByBatch(b2) = %d, want 1", got)
+		}
+		if got := q.CountByBatch("b1"); got != 0 {
+			t.Errorf("CountByBatch(b1) = %d, want 0 (phantom drift)", got)
+		}
+	})
+
+	t.Run("no-change update keeps stats stable", func(t *testing.T) {
+		t.Parallel()
+		q := NewJobQueue()
+		j1 := NewSpawnJob("j1", JobTypeSession, "s")
+		j1.Priority = PriorityNormal
+		q.Enqueue(j1)
+
+		j1same := NewSpawnJob("j1", JobTypeSession, "s")
+		j1same.Priority = PriorityNormal
+		q.Enqueue(j1same)
+
+		stats := q.Stats()
+		if stats.ByPriority[PriorityNormal] != 1 {
+			t.Errorf("ByPriority[Normal] = %d after no-op update, want 1", stats.ByPriority[PriorityNormal])
+		}
+		if stats.CurrentSize != 1 {
+			t.Errorf("CurrentSize = %d, want 1", stats.CurrentSize)
+		}
+	})
+}
+
 func TestJobQueue_Dequeue_Empty(t *testing.T) {
 	t.Parallel()
 	q := NewJobQueue()

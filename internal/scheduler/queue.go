@@ -75,8 +75,48 @@ func (q *JobQueue) Enqueue(job *SpawnJob) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if _, exists := q.byID[job.ID]; exists {
-		// Job already in queue, update it
+	if old, exists := q.byID[job.ID]; exists {
+		// Job already in queue, update it.
+		// bd-m0n8c: re-bucket the per-priority/per-type stats and the
+		// per-session/per-batch counts when the indexed fields change
+		// across the update — without this, an Enqueue that mutates
+		// Priority/Type/SessionName/BatchID for an existing ID leaves
+		// dangling counts in the old buckets and missing counts in the
+		// new ones (Stats() reports the wrong distribution). Same
+		// delete-when-zero discipline as the bd-o35sn / bd-s8sex
+		// fixes elsewhere in this file.
+		if old.Priority != job.Priority {
+			q.stats.ByPriority[old.Priority]--
+			if q.stats.ByPriority[old.Priority] <= 0 {
+				delete(q.stats.ByPriority, old.Priority)
+			}
+			q.stats.ByPriority[job.Priority]++
+		}
+		if old.Type != job.Type {
+			q.stats.ByType[old.Type]--
+			if q.stats.ByType[old.Type] <= 0 {
+				delete(q.stats.ByType, old.Type)
+			}
+			q.stats.ByType[job.Type]++
+		}
+		if old.SessionName != job.SessionName {
+			q.sessionCounts[old.SessionName]--
+			if q.sessionCounts[old.SessionName] <= 0 {
+				delete(q.sessionCounts, old.SessionName)
+			}
+			q.sessionCounts[job.SessionName]++
+		}
+		if old.BatchID != job.BatchID {
+			if old.BatchID != "" {
+				q.batchCounts[old.BatchID]--
+				if q.batchCounts[old.BatchID] <= 0 {
+					delete(q.batchCounts, old.BatchID)
+				}
+			}
+			if job.BatchID != "" {
+				q.batchCounts[job.BatchID]++
+			}
+		}
 		q.updateJobLocked(job)
 		return
 	}
