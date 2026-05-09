@@ -2,7 +2,6 @@
 package git
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -131,6 +130,22 @@ func parseLegacyAgentKeyFromWorktreeName(name string) string {
 		return ""
 	}
 	return parts[1]
+}
+
+func pathsReferToSameLocation(pathA, pathB string) bool {
+	if len(pathA) == 0 || len(pathB) == 0 {
+		return false
+	}
+	if filepath.Clean(pathA) == filepath.Clean(pathB) {
+		return true
+	}
+
+	statA, errA := os.Stat(pathA)
+	statB, errB := os.Stat(pathB)
+	if errA == nil && errB == nil {
+		return os.SameFile(statA, statB)
+	}
+	return false
 }
 
 // WorktreeManager handles git worktree creation and management for agent isolation
@@ -445,7 +460,7 @@ func (wm *WorktreeManager) parseWorktreeList(output string) ([]*WorktreeInfo, er
 			// git worktree list includes the primary checkout. Even if that
 			// checkout is currently on an agent/* branch, it is not an agent
 			// worktree entry and must be excluded from agent listings.
-			if len(wm.baseRepo) > 0 && bytes.Equal([]byte(filepath.Clean(path)), []byte(filepath.Clean(wm.baseRepo))) {
+			if pathsReferToSameLocation(path, wm.baseRepo) {
 				continue
 			}
 			basename := filepath.Base(path)

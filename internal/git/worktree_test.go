@@ -383,6 +383,32 @@ func TestWorktreeManager_parseWorktreeList_ExcludesPrimaryCheckoutOnAgentBranch(
 	}
 }
 
+func TestWorktreeManager_parseWorktreeList_ExcludesPrimaryCheckoutWithSymlinkBaseRepo(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	realRepoPath := filepath.Join(tmp, "repo-real")
+	if err := os.MkdirAll(realRepoPath, 0o755); err != nil {
+		t.Fatalf("mkdir real repo: %v", err)
+	}
+
+	symlinkRepoPath := filepath.Join(tmp, "repo-link")
+	if err := os.Symlink(realRepoPath, symlinkRepoPath); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+
+	wm := &WorktreeManager{baseRepo: symlinkRepoPath}
+	output := fmt.Sprintf("worktree %s\nHEAD abc123\nbranch refs/heads/agent/evil-type/sess-one\n", realRepoPath)
+
+	worktrees, err := wm.parseWorktreeList(output)
+	if err != nil {
+		t.Fatalf("parseWorktreeList: %v", err)
+	}
+	if len(worktrees) != 0 {
+		t.Fatalf("expected primary checkout path to be excluded for symlinked base repo, got %d worktrees", len(worktrees))
+	}
+}
+
 func TestWorktreeManager_parseWorktreeList_IncludesAgentBranchWithoutAgentBasename(t *testing.T) {
 	t.Parallel()
 
