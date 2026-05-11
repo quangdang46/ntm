@@ -1191,6 +1191,10 @@ func validateImportedManifestMetadata(manifest *ExportManifest, cp *Checkpoint) 
 }
 
 func validateImportedArchiveFiles(fileContents map[string][]byte, cp *Checkpoint) error {
+	if err := validateImportedArtifactReferences(cp); err != nil {
+		return err
+	}
+
 	expectedFiles := expectedManifestFiles(cp)
 	for name := range fileContents {
 		if name == "MANIFEST.json" {
@@ -1221,6 +1225,30 @@ func validateImportedArchiveFiles(fileContents map[string][]byte, cp *Checkpoint
 		if _, ok := fileContents[cp.Git.StatusFile]; !ok {
 			return fmt.Errorf("archive missing git status referenced by metadata: %s", cp.Git.StatusFile)
 		}
+	}
+
+	return nil
+}
+
+func validateImportedArtifactReferences(cp *Checkpoint) error {
+	for _, pane := range cp.Session.Panes {
+		if pane.ScrollbackFile == "" {
+			continue
+		}
+		if err := validateImportEntryName(pane.ScrollbackFile); err != nil {
+			return fmt.Errorf("invalid scrollback path for pane %s: %w", pane.ID, err)
+		}
+		cleanPath := filepath.ToSlash(filepath.Clean(pane.ScrollbackFile))
+		if cleanPath == PanesDir || !strings.HasPrefix(cleanPath, PanesDir+"/") {
+			return fmt.Errorf("invalid scrollback path for pane %s: must be under %s/: %s", pane.ID, PanesDir, pane.ScrollbackFile)
+		}
+	}
+
+	if cp.Git.PatchFile != "" && cp.Git.PatchFile != GitPatchFile {
+		return fmt.Errorf("invalid git patch path: expected %s, got %s", GitPatchFile, cp.Git.PatchFile)
+	}
+	if cp.Git.StatusFile != "" && cp.Git.StatusFile != GitStatusFile {
+		return fmt.Errorf("invalid git status path: expected %s, got %s", GitStatusFile, cp.Git.StatusFile)
 	}
 
 	return nil

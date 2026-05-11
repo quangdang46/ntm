@@ -593,6 +593,84 @@ func TestImportTarGz_ManifestListsMissingFile(t *testing.T) {
 	}
 }
 
+func TestImportTarGz_RejectsScrollbackAliasToMetadata(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	storage := NewStorageWithDir(tmpDir)
+
+	sessionName := "alias-scrollback-session"
+	checkpointID := "alias-scrollback-cp"
+	session := SessionState{
+		Panes: []PaneState{
+			{ID: "%0", Index: 0, ScrollbackFile: MetadataFile},
+		},
+	}
+	cp := &Checkpoint{
+		Version:     CurrentVersion,
+		ID:          checkpointID,
+		SessionName: sessionName,
+		CreatedAt:   time.Now(),
+		Session:     session,
+		PaneCount:   1,
+	}
+	cpJSON, err := json.Marshal(cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionJSON := validSessionJSON(t, session)
+
+	archive := filepath.Join(tmpDir, "alias-scrollback.tar.gz")
+	buildTarGz(t, archive, map[string][]byte{
+		MetadataFile: cpJSON,
+		SessionFile:  sessionJSON,
+	})
+
+	_, err = storage.Import(archive, ImportOptions{VerifyChecksums: false})
+	if err == nil {
+		t.Fatal("expected import to reject scrollback alias to metadata.json")
+	}
+	if !strings.Contains(err.Error(), "invalid scrollback path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestImportZip_RejectsGitPatchAliasToMetadata(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	storage := NewStorageWithDir(tmpDir)
+
+	sessionName := "alias-git-patch-session"
+	checkpointID := "alias-git-patch-cp"
+	cp := &Checkpoint{
+		Version:     CurrentVersion,
+		ID:          checkpointID,
+		SessionName: sessionName,
+		CreatedAt:   time.Now(),
+		Git: GitState{
+			PatchFile: MetadataFile,
+		},
+	}
+	cpJSON, err := json.Marshal(cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionJSON := validSessionJSON(t, SessionState{})
+
+	archive := filepath.Join(tmpDir, "alias-git-patch.zip")
+	buildZip(t, archive, map[string][]byte{
+		MetadataFile: cpJSON,
+		SessionFile:  sessionJSON,
+	})
+
+	_, err = storage.Import(archive, ImportOptions{VerifyChecksums: false})
+	if err == nil {
+		t.Fatal("expected import to reject git patch alias to metadata.json")
+	}
+	if !strings.Contains(err.Error(), "invalid git patch path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // =============================================================================
 // Import tar.gz: overwrite protection
 // =============================================================================
