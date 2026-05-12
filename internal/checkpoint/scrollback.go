@@ -217,9 +217,9 @@ func (s *Storage) SaveCompressedScrollback(sessionName, checkpointID, paneID str
 	if err != nil {
 		return "", err
 	}
-	panesDir := filepath.Join(dir, PanesDir)
-	if err := os.MkdirAll(panesDir, 0755); err != nil {
-		return "", fmt.Errorf("creating panes directory: %w", err)
+	panesDir, err := ensureCheckpointSubdir(dir, PanesDir, "panes")
+	if err != nil {
+		return "", err
 	}
 
 	// Use .txt.gz extension for compressed files
