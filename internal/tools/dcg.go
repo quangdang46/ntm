@@ -336,7 +336,7 @@ func extractRCHInnerCommand(command string) (string, bool) {
 		return "", false
 	}
 	switch fields[1] {
-	case "build":
+	case "build", "exec":
 		inner := fields[2:]
 		if len(inner) == 0 {
 			return "", false

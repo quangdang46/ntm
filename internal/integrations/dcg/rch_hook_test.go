@@ -4,8 +4,8 @@ import "testing"
 
 func TestDefaultRCHHookOptions(t *testing.T) {
 	opts := DefaultRCHHookOptions()
-	if opts.Timeout != 5000 {
-		t.Errorf("Expected default timeout 5000, got %d", opts.Timeout)
+	if opts.Timeout != 5 {
+		t.Errorf("Expected default timeout 5, got %d", opts.Timeout)
 	}
 }
 
@@ -23,20 +23,25 @@ func TestGenerateRCHHookEntry_Basic(t *testing.T) {
 		t.Errorf("Expected matcher 'Bash', got %q", entry.Matcher)
 	}
 
-	if entry.Timeout != 5000 {
-		t.Errorf("Expected timeout 5000, got %d", entry.Timeout)
+	handler := singleHookHandler(t, entry)
+	if handler.Type != "command" {
+		t.Errorf("Expected handler type 'command', got %q", handler.Type)
 	}
 
-	if !contains(entry.Command, "rch") {
-		t.Errorf("Expected command to contain rch, got %q", entry.Command)
+	if handler.Timeout != 5 {
+		t.Errorf("Expected timeout 5, got %d", handler.Timeout)
 	}
 
-	if !contains(entry.Command, "intercept") {
-		t.Errorf("Expected command to contain intercept, got %q", entry.Command)
+	if !contains(handler.Command, "rch") {
+		t.Errorf("Expected command to contain rch, got %q", handler.Command)
 	}
 
-	if !contains(entry.Command, "cargo build") {
-		t.Errorf("Expected command to include cargo build pattern, got %q", entry.Command)
+	if contains(handler.Command, "intercept") {
+		t.Errorf("Command should not use removed 'intercept' subcommand, got %q", handler.Command)
+	}
+
+	if contains(handler.Command, "CLAUDE_TOOL_INPUT_command") {
+		t.Errorf("Command should use rch hook stdin rather than obsolete env var, got %q", handler.Command)
 	}
 }
 
@@ -44,7 +49,7 @@ func TestGenerateRCHHookEntry_CustomBinary(t *testing.T) {
 	opts := RCHHookOptions{
 		BinaryPath: "/opt/rch",
 		Patterns:   []string{"^go build"},
-		Timeout:    3000,
+		Timeout:    3,
 	}
 
 	entry, err := GenerateRCHHookEntry(opts)
@@ -52,12 +57,13 @@ func TestGenerateRCHHookEntry_CustomBinary(t *testing.T) {
 		t.Fatalf("GenerateRCHHookEntry failed: %v", err)
 	}
 
-	if !contains(entry.Command, "/opt/rch") {
-		t.Errorf("Expected command to include custom binary path, got %q", entry.Command)
+	handler := singleHookHandler(t, entry)
+	if !contains(handler.Command, "/opt/rch") {
+		t.Errorf("Expected command to include custom binary path, got %q", handler.Command)
 	}
 
-	if entry.Timeout != 3000 {
-		t.Errorf("Expected timeout 3000, got %d", entry.Timeout)
+	if handler.Timeout != 3 {
+		t.Errorf("Expected timeout 3, got %d", handler.Timeout)
 	}
 }
 

@@ -3,10 +3,11 @@ package dcg
 import "strings"
 
 var rchWhitelistPatterns = []string{
-	"rch *",
-	"rch build *",
-	"rch intercept *",
-	"rch offload *",
+	"rch exec *",
+	"rch hook *",
+	"rch status *",
+	"rch check *",
+	"rch doctor *",
 }
 
 // RCHWhitelistPatterns returns the default DCG whitelist patterns for RCH commands.

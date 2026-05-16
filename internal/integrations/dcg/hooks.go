@@ -22,11 +22,17 @@ type HooksSection struct {
 	PreToolUse []HookEntry `json:"PreToolUse,omitempty"`
 }
 
-// HookEntry represents a single hook configuration.
+// HookEntry represents a matcher group in Claude Code's hook configuration.
 type HookEntry struct {
-	Matcher string `json:"matcher"`           // Tool name to match (e.g., "Bash")
-	Command string `json:"command"`           // Command to run
-	Timeout int    `json:"timeout,omitempty"` // Optional timeout in ms
+	Matcher string        `json:"matcher"` // Tool name to match (e.g., "Bash")
+	Hooks   []HookHandler `json:"hooks"`   // Hook handlers to run when the matcher fires
+}
+
+// HookHandler represents a single hook command within a matcher group.
+type HookHandler struct {
+	Type    string `json:"type"`              // Hook handler type (e.g., "command")
+	Command string `json:"command,omitempty"` // Command to run
+	Timeout int    `json:"timeout,omitempty"` // Optional timeout in seconds
 }
 
 // DCGHookOptions configures how DCG hooks are generated.
@@ -34,23 +40,26 @@ type DCGHookOptions struct {
 	// BinaryPath is the path to the dcg binary. If empty, "dcg" is used (PATH lookup).
 	BinaryPath string
 
-	// AuditLog is an optional path to write audit logs.
+	// AuditLog is not supported by modern dcg hook-mode command generation.
+	// Configure dcg's own config/allowlist files instead of passing inline policy flags.
 	AuditLog string
 
-	// Timeout is the hook timeout in milliseconds. Default is 5000ms.
+	// Timeout is the hook timeout in seconds. Default is 5 seconds.
 	Timeout int
 
-	// CustomBlocklist adds additional patterns to block.
+	// CustomBlocklist is not supported by modern dcg hook-mode command generation.
+	// Configure dcg's own pack/config files instead of passing inline policy flags.
 	CustomBlocklist []string
 
-	// CustomWhitelist adds patterns to always allow.
+	// CustomWhitelist is not supported by modern dcg hook-mode command generation.
+	// Configure dcg's own allowlist files instead of passing inline policy flags.
 	CustomWhitelist []string
 }
 
 // DefaultDCGHookOptions returns sensible defaults for DCG hook configuration.
 func DefaultDCGHookOptions() DCGHookOptions {
 	return DCGHookOptions{
-		Timeout: 5000, // 5 seconds
+		Timeout: 5,
 	}
 }
 
@@ -62,45 +71,43 @@ func GenerateHookConfig(opts DCGHookOptions) (*ClaudeHookConfig, error) {
 		dcgBinary = "dcg"
 	}
 
-	// Build the check command
-	// DCG check command format: dcg check [options] "<command>"
-	// The command placeholder will be filled by Claude Code via $CLAUDE_TOOL_INPUT_command
-	var cmdParts []string
-	cmdParts = append(cmdParts, dcgBinary, "check")
-
-	// Add audit log option if specified
 	if opts.AuditLog != "" {
-		cmdParts = append(cmdParts, "--audit-log", opts.AuditLog)
+		return nil, fmt.Errorf("dcg hook generation does not support inline audit_log; configure dcg directly")
+	}
+	if len(opts.CustomBlocklist) > 0 {
+		return nil, fmt.Errorf("dcg hook generation does not support inline custom_blocklist; configure dcg packs directly")
+	}
+	if len(opts.CustomWhitelist) > 0 {
+		return nil, fmt.Errorf("dcg hook generation does not support inline custom_whitelist; configure dcg allowlists directly")
 	}
 
-	// Add custom blocklist patterns
-	for _, pattern := range opts.CustomBlocklist {
-		cmdParts = append(cmdParts, "--block", pattern)
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = DefaultDCGHookOptions().Timeout
 	}
-
-	// Add custom whitelist patterns
-	for _, pattern := range opts.CustomWhitelist {
-		cmdParts = append(cmdParts, "--allow", pattern)
-	}
-
-	// The command argument - use shell variable that Claude Code sets
-	cmdParts = append(cmdParts, "--", "$CLAUDE_TOOL_INPUT_command")
-
-	checkCmd := strings.Join(cmdParts, " ")
 
 	config := &ClaudeHookConfig{
 		Hooks: HooksSection{
 			PreToolUse: []HookEntry{
-				{
-					Matcher: "Bash",
-					Command: checkCmd,
-					Timeout: opts.Timeout,
-				},
+				newCommandHookEntry("Bash", shellQuote(dcgBinary), timeout),
 			},
 		},
 	}
 
 	return config, nil
+}
+
+func newCommandHookEntry(matcher, command string, timeout int) HookEntry {
+	return HookEntry{
+		Matcher: matcher,
+		Hooks: []HookHandler{
+			{
+				Type:    "command",
+				Command: command,
+				Timeout: timeout,
+			},
+		},
+	}
 }
 
 // GenerateHookJSON creates the JSON string for Claude Code hook configuration.
@@ -206,15 +213,14 @@ func WriteHookConfigFile(opts DCGHookOptions, configPath string) error {
 	return os.WriteFile(configPath, []byte(jsonConfig), 0644)
 }
 
-// HookEnvVars returns environment variables that can be set to configure
-// Claude Code hooks for DCG. These can be passed to the agent process.
+// HookEnvVars returns the legacy environment variable used by ntm's agent launcher
+// to pass generated Claude Code hook JSON to the spawned process.
 func HookEnvVars(opts DCGHookOptions) (map[string]string, error) {
 	jsonConfig, err := GenerateHookJSON(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	// Claude Code reads hooks from CLAUDE_CODE_HOOKS env var
 	return map[string]string{
 		"CLAUDE_CODE_HOOKS": jsonConfig,
 	}, nil

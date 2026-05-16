@@ -10,8 +10,8 @@ import (
 func TestDefaultDCGHookOptions(t *testing.T) {
 	opts := DefaultDCGHookOptions()
 
-	if opts.Timeout != 5000 {
-		t.Errorf("Expected Timeout 5000, got %d", opts.Timeout)
+	if opts.Timeout != 5 {
+		t.Errorf("Expected Timeout 5, got %d", opts.Timeout)
 	}
 
 	if opts.BinaryPath != "" {
@@ -31,37 +31,41 @@ func TestGenerateHookConfig_Basic(t *testing.T) {
 	}
 
 	hook := config.Hooks.PreToolUse[0]
+	handler := singleHookHandler(t, hook)
 
 	if hook.Matcher != "Bash" {
 		t.Errorf("Expected Matcher 'Bash', got %q", hook.Matcher)
 	}
 
-	if hook.Timeout != 5000 {
-		t.Errorf("Expected Timeout 5000, got %d", hook.Timeout)
+	if handler.Type != "command" {
+		t.Errorf("Expected handler type 'command', got %q", handler.Type)
 	}
 
-	// Command should contain dcg check
-	if hook.Command == "" {
+	if handler.Timeout != 5 {
+		t.Errorf("Expected Timeout 5, got %d", handler.Timeout)
+	}
+
+	if handler.Command == "" {
 		t.Error("Expected non-empty command")
 	}
 
-	if !contains(hook.Command, "dcg") {
-		t.Errorf("Command should contain 'dcg', got %q", hook.Command)
+	if !contains(handler.Command, "dcg") {
+		t.Errorf("Command should contain 'dcg', got %q", handler.Command)
 	}
 
-	if !contains(hook.Command, "check") {
-		t.Errorf("Command should contain 'check', got %q", hook.Command)
+	if contains(handler.Command, "check") {
+		t.Errorf("Command should not use removed 'check' subcommand, got %q", handler.Command)
 	}
 
-	if !contains(hook.Command, "$CLAUDE_TOOL_INPUT_command") {
-		t.Errorf("Command should contain '$CLAUDE_TOOL_INPUT_command', got %q", hook.Command)
+	if contains(handler.Command, "CLAUDE_TOOL_INPUT_command") {
+		t.Errorf("Command should use dcg hook stdin rather than obsolete env var, got %q", handler.Command)
 	}
 }
 
 func TestGenerateHookConfig_CustomBinaryPath(t *testing.T) {
 	opts := DCGHookOptions{
 		BinaryPath: "/custom/path/to/dcg",
-		Timeout:    3000,
+		Timeout:    3,
 	}
 
 	config, err := GenerateHookConfig(opts)
@@ -69,72 +73,50 @@ func TestGenerateHookConfig_CustomBinaryPath(t *testing.T) {
 		t.Fatalf("GenerateHookConfig failed: %v", err)
 	}
 
-	hook := config.Hooks.PreToolUse[0]
+	handler := singleHookHandler(t, config.Hooks.PreToolUse[0])
 
-	if !contains(hook.Command, "/custom/path/to/dcg") {
-		t.Errorf("Command should contain custom binary path, got %q", hook.Command)
+	if !contains(handler.Command, "/custom/path/to/dcg") {
+		t.Errorf("Command should contain custom binary path, got %q", handler.Command)
 	}
 
-	if hook.Timeout != 3000 {
-		t.Errorf("Expected Timeout 3000, got %d", hook.Timeout)
+	if handler.Timeout != 3 {
+		t.Errorf("Expected Timeout 3, got %d", handler.Timeout)
 	}
 }
 
-func TestGenerateHookConfig_WithAuditLog(t *testing.T) {
-	opts := DCGHookOptions{
-		AuditLog: "/var/log/dcg-audit.jsonl",
-		Timeout:  5000,
+func TestGenerateHookConfig_RejectsUnsupportedInlineOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		opts DCGHookOptions
+		want string
+	}{
+		{
+			name: "audit log",
+			opts: DCGHookOptions{AuditLog: "/var/log/dcg-audit.jsonl"},
+			want: "audit_log",
+		},
+		{
+			name: "blocklist",
+			opts: DCGHookOptions{CustomBlocklist: []string{"rm -rf /", "DROP DATABASE"}},
+			want: "custom_blocklist",
+		},
+		{
+			name: "whitelist",
+			opts: DCGHookOptions{CustomWhitelist: []string{"git status", "ls -la"}},
+			want: "custom_whitelist",
+		},
 	}
 
-	config, err := GenerateHookConfig(opts)
-	if err != nil {
-		t.Fatalf("GenerateHookConfig failed: %v", err)
-	}
-
-	hook := config.Hooks.PreToolUse[0]
-
-	if !contains(hook.Command, "--audit-log") {
-		t.Errorf("Command should contain '--audit-log', got %q", hook.Command)
-	}
-
-	if !contains(hook.Command, "/var/log/dcg-audit.jsonl") {
-		t.Errorf("Command should contain audit log path, got %q", hook.Command)
-	}
-}
-
-func TestGenerateHookConfig_WithBlocklist(t *testing.T) {
-	opts := DCGHookOptions{
-		CustomBlocklist: []string{"rm -rf /", "DROP DATABASE"},
-		Timeout:         5000,
-	}
-
-	config, err := GenerateHookConfig(opts)
-	if err != nil {
-		t.Fatalf("GenerateHookConfig failed: %v", err)
-	}
-
-	hook := config.Hooks.PreToolUse[0]
-
-	if !contains(hook.Command, "--block") {
-		t.Errorf("Command should contain '--block', got %q", hook.Command)
-	}
-}
-
-func TestGenerateHookConfig_WithWhitelist(t *testing.T) {
-	opts := DCGHookOptions{
-		CustomWhitelist: []string{"git status", "ls -la"},
-		Timeout:         5000,
-	}
-
-	config, err := GenerateHookConfig(opts)
-	if err != nil {
-		t.Fatalf("GenerateHookConfig failed: %v", err)
-	}
-
-	hook := config.Hooks.PreToolUse[0]
-
-	if !contains(hook.Command, "--allow") {
-		t.Errorf("Command should contain '--allow', got %q", hook.Command)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := GenerateHookConfig(tt.opts)
+			if err == nil {
+				t.Fatal("GenerateHookConfig succeeded with unsupported inline option")
+			}
+			if !contains(err.Error(), tt.want) {
+				t.Fatalf("error %q does not mention %q", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -200,7 +182,7 @@ func TestWriteHookConfigFile(t *testing.T) {
 
 	opts := DCGHookOptions{
 		BinaryPath: "/usr/local/bin/dcg",
-		Timeout:    3000,
+		Timeout:    3,
 	}
 
 	err = WriteHookConfigFile(opts, configPath)
@@ -232,10 +214,10 @@ func TestWriteHookConfigFile(t *testing.T) {
 func TestAppendRCHWhitelist(t *testing.T) {
 	t.Parallel()
 
-	base := []string{"git status", "rch *"}
+	base := []string{"git status", "rch exec *"}
 	merged := AppendRCHWhitelist(base)
 
-	expected := []string{"git status", "rch *", "rch build *", "rch intercept *", "rch offload *"}
+	expected := []string{"git status", "rch exec *", "rch hook *", "rch status *", "rch check *", "rch doctor *"}
 	if len(merged) != len(expected) {
 		t.Fatalf("expected %d entries, got %d: %v", len(expected), len(merged), merged)
 	}
@@ -254,10 +236,11 @@ func TestRCHWhitelistPatterns(t *testing.T) {
 		t.Fatalf("expected at least 3 patterns, got %d", len(patterns))
 	}
 	found := map[string]bool{
-		"rch *":           false,
-		"rch build *":     false,
-		"rch intercept *": false,
-		"rch offload *":   false,
+		"rch exec *":   false,
+		"rch hook *":   false,
+		"rch status *": false,
+		"rch check *":  false,
+		"rch doctor *": false,
 	}
 	for _, pattern := range patterns {
 		if _, ok := found[pattern]; ok {
@@ -309,8 +292,13 @@ func TestClaudeHookConfig_JSONFormat(t *testing.T) {
 			PreToolUse: []HookEntry{
 				{
 					Matcher: "Bash",
-					Command: "dcg check -- $CLAUDE_TOOL_INPUT_command",
-					Timeout: 5000,
+					Hooks: []HookHandler{
+						{
+							Type:    "command",
+							Command: "dcg",
+							Timeout: 5,
+						},
+					},
 				},
 			},
 		},
@@ -348,6 +336,21 @@ func TestClaudeHookConfig_JSONFormat(t *testing.T) {
 
 	if entry["matcher"] != "Bash" {
 		t.Errorf("Expected matcher 'Bash', got %v", entry["matcher"])
+	}
+
+	handlers, ok := entry["hooks"].([]interface{})
+	if !ok {
+		t.Fatal("Expected nested 'hooks' array in PreToolUse entry")
+	}
+	if len(handlers) != 1 {
+		t.Fatalf("Expected 1 nested hook handler, got %d", len(handlers))
+	}
+	handler, ok := handlers[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected hook handler to be an object")
+	}
+	if handler["type"] != "command" {
+		t.Errorf("Expected handler type 'command', got %v", handler["type"])
 	}
 }
 
@@ -389,4 +392,12 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func singleHookHandler(t *testing.T, entry HookEntry) HookHandler {
+	t.Helper()
+	if len(entry.Hooks) != 1 {
+		t.Fatalf("expected 1 nested hook handler, got %d", len(entry.Hooks))
+	}
+	return entry.Hooks[0]
 }

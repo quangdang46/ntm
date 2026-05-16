@@ -1310,9 +1310,9 @@ type IntegrationsConfig struct {
 type DCGConfig struct {
 	Enabled         bool     `toml:"enabled"`
 	BinaryPath      string   `toml:"binary_path"`
-	CustomBlocklist []string `toml:"custom_blocklist"`
-	CustomWhitelist []string `toml:"custom_whitelist"`
-	AuditLog        string   `toml:"audit_log"`
+	CustomBlocklist []string `toml:"custom_blocklist"` // Legacy: configure modern dcg packs directly
+	CustomWhitelist []string `toml:"custom_whitelist"` // Legacy: configure modern dcg allowlists directly
+	AuditLog        string   `toml:"audit_log"`        // Legacy: configure modern dcg logging directly
 	AllowOverride   bool     `toml:"allow_override"`
 }
 
@@ -1479,7 +1479,7 @@ type RCHConfig struct {
 	FallbackLocal     bool     `toml:"fallback_local"`     // Fallback to local build on RCH failure
 	ShowLocation      bool     `toml:"show_location"`      // Show build location in output
 	PreferredWorker   string   `toml:"preferred_worker"`   // Worker preference (by name or "auto")
-	DCGWhitelist      bool     `toml:"dcg_whitelist"`      // Whitelist RCH wrapper commands in DCG checks
+	DCGWhitelist      bool     `toml:"dcg_whitelist"`      // Legacy no-op: modern DCG handles RCH hook commands directly
 }
 
 // DefaultRCHConfig returns sensible defaults for RCH integration.
@@ -1497,7 +1497,7 @@ func DefaultRCHConfig() RCHConfig {
 		FallbackLocal:   true,   // Fallback to local if remote fails
 		ShowLocation:    true,   // Show where build ran
 		PreferredWorker: "auto", // Auto-select best worker
-		DCGWhitelist:    true,   // Allow RCH wrapper commands in DCG checks
+		DCGWhitelist:    true,   // Legacy no-op retained in config files
 	}
 }
 
@@ -3128,7 +3128,7 @@ func Print(cfg *Config, w io.Writer) error {
 	} else {
 		fmt.Fprintln(w, "custom_whitelist = []")
 	}
-	fmt.Fprintln(w, "# RCH wrapper commands are allowlisted when integrations.rch.dcg_whitelist = true")
+	fmt.Fprintln(w, "# dcg_whitelist is legacy; modern DCG handles RCH hook commands directly")
 	if cfg.Integrations.DCG.AuditLog != "" {
 		fmt.Fprintf(w, "audit_log = %q\n", cfg.Integrations.DCG.AuditLog)
 	} else {
