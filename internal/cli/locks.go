@@ -352,6 +352,9 @@ func locksCheckPathMatches(path, pattern string) bool {
 	if path == pattern {
 		return true
 	}
+	if pattern == "." {
+		return path != "" && !pathpkg.IsAbs(path) && path != ".." && !strings.HasPrefix(path, "../")
+	}
 	if pattern == "**" {
 		return path != ""
 	}

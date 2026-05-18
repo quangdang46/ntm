@@ -1,6 +1,7 @@
 package startup
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -107,6 +108,20 @@ func TestGetStats(t *testing.T) {
 	}
 	if !stats.Phase2Done {
 		t.Error("Phase2Done should be true")
+	}
+}
+
+func TestGetStatsSortsInitializedNames(t *testing.T) {
+	Reset()
+
+	markInitialized("zeta")
+	markInitialized("alpha")
+	markInitialized("beta")
+
+	stats := GetStats()
+	want := []string{"alpha", "beta", "zeta"}
+	if !reflect.DeepEqual(stats.Initialized, want) {
+		t.Fatalf("Initialized = %v, want %v", stats.Initialized, want)
 	}
 }
 

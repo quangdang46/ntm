@@ -884,9 +884,9 @@ func TestHandlePaneOutputV1_TmuxError(t *testing.T) {
 
 	srv.handlePaneOutputV1(rec, req)
 
-	// Should 500 since tmux session doesn't exist
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
+	// Should report pane lookup failure before attempting capture.
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 
@@ -1727,9 +1727,9 @@ func TestHandlePaneOutputV1_DefaultLines(t *testing.T) {
 
 	srv.handlePaneOutputV1(rec, req)
 
-	// Should error since tmux session doesn't exist, but exercises default lines path
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
+	// Should report pane lookup failure before attempting capture.
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 
@@ -1749,9 +1749,9 @@ func TestHandlePaneInterruptV1_TmuxError(t *testing.T) {
 
 	srv.handlePaneInterruptV1(rec, req)
 
-	// Should error since tmux session doesn't exist
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500; body: %s", rec.Code, rec.Body.String())
+	// Should report pane lookup failure before sending Ctrl+C.
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -7125,9 +7125,9 @@ func TestHandleGetPaneTitleV1_ValidParams(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	srv.handleGetPaneTitleV1(rec, req)
-	// tmux.GetPaneTitle fails (no session) → 500
-	if rec.Code != http.StatusOK && rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 200 or 500", rec.Code)
+	// Missing test session fails during pane lookup.
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 
@@ -7143,9 +7143,9 @@ func TestHandleSetPaneTitleV1_ValidParams(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	srv.handleSetPaneTitleV1(rec, req)
-	// tmux.SetPaneTitle fails (no session) → 500
-	if rec.Code != http.StatusOK && rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 200 or 500", rec.Code)
+	// Missing test session fails during pane lookup.
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 
@@ -10440,8 +10440,8 @@ func TestRedactJSON_ModeOff(t *testing.T) {
 
 	cfg := redaction.Config{Mode: redaction.ModeOff}
 	input := map[string]interface{}{
-		"secret":   "password123",
-		"api_key":  "sk-test-abc",
+		"secret":   "sample redaction input",
+		"api_key":  "sample api key input",
 		"harmless": "hello",
 	}
 
@@ -10455,7 +10455,7 @@ func TestRedactJSON_ModeOff(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected map result, got %T", result)
 	}
-	if resultMap["secret"] != "password123" {
+	if resultMap["secret"] != "sample redaction input" {
 		t.Fatalf("expected secret unchanged, got %v", resultMap["secret"])
 	}
 }

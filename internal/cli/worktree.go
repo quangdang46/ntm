@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -296,23 +295,12 @@ func runWorktreeCleanup(cmd *cobra.Command, args []string) error {
 func runWorktreeSync(cmd *cobra.Command, args []string) error {
 	worktreePath := args[0]
 
-	// Verify the path exists and is a git repository
-	if !git.IsGitRepository(worktreePath) {
-		return fmt.Errorf("path is not a git repository: %s", worktreePath)
+	worktreeRoot, err := resolveWorktreeSyncRoot(worktreePath)
+	if err != nil {
+		return err
 	}
 
-	// Get the parent project directory to create a manager
-	// This is a bit hacky - ideally we'd track the parent repo differently
-	parentDir := filepath.Dir(worktreePath)
-	if !git.IsGitRepository(parentDir) {
-		// Try one level up (common pattern: /project/../agent-name/)
-		parentDir = filepath.Dir(parentDir)
-		if !git.IsGitRepository(parentDir) {
-			return fmt.Errorf("could not find parent git repository for worktree: %s", worktreePath)
-		}
-	}
-
-	wm, err := git.NewWorktreeManager(parentDir)
+	wm, err := git.NewWorktreeManager(worktreeRoot)
 	if err != nil {
 		return fmt.Errorf("failed to initialize worktree manager: %w", err)
 	}
@@ -320,15 +308,23 @@ func runWorktreeSync(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	fmt.Printf("Synchronizing worktree %s...\n", worktreePath)
+	fmt.Printf("Synchronizing worktree %s...\n", worktreeRoot)
 
-	if err := wm.SyncWorktree(ctx, worktreePath); err != nil {
+	if err := wm.SyncWorktree(ctx, worktreeRoot); err != nil {
 		return fmt.Errorf("failed to sync worktree: %w", err)
 	}
 
 	fmt.Printf("✓ Worktree synchronized successfully!\n")
 
 	return nil
+}
+
+func resolveWorktreeSyncRoot(worktreePath string) (string, error) {
+	root, err := git.FindProjectRoot(worktreePath)
+	if err != nil {
+		return "", fmt.Errorf("path is not a git repository: %s", worktreePath)
+	}
+	return root, nil
 }
 
 // Helper functions

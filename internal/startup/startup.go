@@ -10,6 +10,7 @@
 package startup
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -225,6 +226,7 @@ func GetStats() Stats {
 	for name := range global.initialized {
 		stats.Initialized = append(stats.Initialized, name)
 	}
+	sort.Strings(stats.Initialized)
 
 	return stats
 }

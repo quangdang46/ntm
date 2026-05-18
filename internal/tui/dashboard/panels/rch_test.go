@@ -60,3 +60,16 @@ func TestRCHPanelViewWithStatsAndWorkers(t *testing.T) {
 		}
 	}
 }
+
+func TestRCHPanelCurrentBuildWorkerIsBusy(t *testing.T) {
+	status := rchWorkerStatus(tools.RCHWorker{
+		Name:         "builder-1",
+		Available:    true,
+		Healthy:      true,
+		Load:         10,
+		CurrentBuild: "go test ./...",
+	})
+	if status != "busy" {
+		t.Fatalf("expected worker with current build to be busy, got %q", status)
+	}
+}

@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/Dicklesworthstone/ntm/internal/config"
+	"github.com/Dicklesworthstone/ntm/internal/git"
 )
 
 func TestLoadWorktreeConfig_UsesLoadedCLIConfig(t *testing.T) {
@@ -87,4 +90,48 @@ func TestLoadWorktreeConfig_InvalidCfgFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid cfgFile")
 	}
+}
+
+func TestResolveWorktreeSyncRootAcceptsProvisionedSiblingWorktree(t *testing.T) {
+	repo := setupCLIWorktreeGitRepo(t)
+	wm, err := git.NewWorktreeManager(repo)
+	if err != nil {
+		t.Fatalf("NewWorktreeManager() error = %v", err)
+	}
+	info, err := wm.ProvisionWorktree(context.Background(), "cod", "session-one")
+	if err != nil {
+		t.Fatalf("ProvisionWorktree() error = %v", err)
+	}
+
+	nested := filepath.Join(info.Path, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", nested, err)
+	}
+
+	got, err := resolveWorktreeSyncRoot(nested)
+	if err != nil {
+		t.Fatalf("resolveWorktreeSyncRoot(%q) error = %v", nested, err)
+	}
+	if got != info.Path {
+		t.Fatalf("resolveWorktreeSyncRoot() = %q, want %q", got, info.Path)
+	}
+}
+
+func setupCLIWorktreeGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"git", "init"},
+		{"git", "symbolic-ref", "HEAD", "refs/heads/main"},
+		{"git", "config", "user.email", "test@example.com"},
+		{"git", "config", "user.name", "Test User"},
+		{"git", "commit", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("%v failed: %v\n%s", args, err, string(out))
+		}
+	}
+	return dir
 }

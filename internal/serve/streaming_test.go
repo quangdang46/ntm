@@ -60,7 +60,7 @@ func TestStreamingStatsEndpoint(t *testing.T) {
 	}
 }
 
-func TestStartStopStreamEndpoint(t *testing.T) {
+func TestStartStopStreamEndpointRejectsMissingPane(t *testing.T) {
 	// Create a minimal server with stream manager
 	s := &Server{
 		wsHub: NewWSHub(),
@@ -84,34 +84,29 @@ func TestStartStopStreamEndpoint(t *testing.T) {
 		s.handleStopPaneStreamV1(w, req)
 	})
 
-	// Test start streaming
+	// Test start streaming. The HTTP endpoint resolves the route's pane index
+	// to a live tmux pane ID before starting a stream, so a missing session
+	// should fail without creating a ghost fallback stream.
 	req := httptest.NewRequest("POST", "/sessions/testsession/panes/0/stream", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	// Should succeed (even if tmux session doesn't exist, it will use fallback)
-	if w.Code != http.StatusOK {
-		t.Errorf("start stream: expected status 200, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Errorf("start stream: expected status 404, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var startResp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &startResp); err != nil {
 		t.Fatalf("failed to parse start response: %v", err)
 	}
-	if startResp["target"] != "testsession:0" {
-		t.Errorf("expected target testsession:0, got %v", startResp["target"])
-	}
-	if startResp["topic"] != "panes:testsession:0" {
-		t.Errorf("expected topic panes:testsession:0, got %v", startResp["topic"])
-	}
-	if startResp["message"] != "streaming started" {
-		t.Errorf("expected message 'streaming started', got %v", startResp["message"])
+	if startResp["success"] != false {
+		t.Errorf("expected success=false, got %v", startResp["success"])
 	}
 
-	// Verify streaming is active
+	// Verify streaming was not started.
 	active := s.streamManager.ListActive()
-	if len(active) != 1 || active[0] != "testsession:0" {
-		t.Errorf("expected active=[testsession:0], got %v", active)
+	if len(active) != 0 {
+		t.Errorf("expected active=[], got %v", active)
 	}
 
 	// Test stop streaming
@@ -119,8 +114,8 @@ func TestStartStopStreamEndpoint(t *testing.T) {
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("stop stream: expected status 200, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Errorf("stop stream: expected status 404, got %d: %s", w.Code, w.Body.String())
 	}
 
 	// Verify streaming stopped
@@ -200,6 +195,7 @@ func TestStreamTopicForTarget(t *testing.T) {
 		want   string
 	}{
 		{name: "raw target", target: "demo:2", want: "panes:demo:2"},
+		{name: "tmux pane id target", target: "%3", want: "panes:%3"},
 		{name: "already canonical", target: "panes:demo:2", want: "panes:demo:2"},
 	}
 

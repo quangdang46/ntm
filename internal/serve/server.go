@@ -3297,10 +3297,8 @@ func (s *Server) handlePaneInputV1(w http.ResponseWriter, r *http.Request) {
 	// the target is base-index-independent — `<session>:<paneIdx>` looks
 	// like a pane index but tmux interprets it as a window index, which
 	// breaks on hosts with `base-index = 1` (see #141).
-	paneTarget, lookupErr := resolvePaneTargetByIndex(r.Context(), sessionID, paneIdx)
-	if lookupErr != nil {
-		writeErrorResponse(w, http.StatusNotFound, ErrCodeNotFound,
-			fmt.Sprintf("pane not found: %v", lookupErr), nil, reqID)
+	paneTarget, ok := s.resolvePaneTargetForRequest(w, r, sessionID, paneIdx, reqID)
+	if !ok {
 		return
 	}
 
@@ -3334,8 +3332,10 @@ func (s *Server) handlePaneInterruptV1(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build pane target
-	paneTarget := fmt.Sprintf("%s:%d", sessionID, paneIdx)
+	paneTarget, ok := s.resolvePaneTargetForRequest(w, r, sessionID, paneIdx, reqID)
+	if !ok {
+		return
+	}
 
 	// Send Ctrl+c to interrupt
 	if err := tmux.SendKeys(paneTarget, "C-c", false); err != nil {
@@ -3377,8 +3377,10 @@ func (s *Server) handlePaneOutputV1(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build pane target
-	paneTarget := fmt.Sprintf("%s:%d", sessionID, paneIdx)
+	paneTarget, ok := s.resolvePaneTargetForRequest(w, r, sessionID, paneIdx, reqID)
+	if !ok {
+		return
+	}
 
 	if err := s.streamManager.StartStream(paneTarget); err != nil {
 		writeErrorResponse(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error(), nil, reqID)
@@ -3413,8 +3415,10 @@ func (s *Server) handleGetPaneTitleV1(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build pane target
-	paneTarget := fmt.Sprintf("%s:%d", sessionID, paneIdx)
+	paneTarget, ok := s.resolvePaneTargetForRequest(w, r, sessionID, paneIdx, reqID)
+	if !ok {
+		return
+	}
 
 	title, err := tmux.GetPaneTitle(paneTarget)
 	if err != nil {
@@ -3454,8 +3458,10 @@ func (s *Server) handleSetPaneTitleV1(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build pane target
-	paneTarget := fmt.Sprintf("%s:%d", sessionID, paneIdx)
+	paneTarget, ok := s.resolvePaneTargetForRequest(w, r, sessionID, paneIdx, reqID)
+	if !ok {
+		return
+	}
 
 	if err := tmux.SetPaneTitle(paneTarget, req.Title); err != nil {
 		writeErrorResponse(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error(), nil, reqID)
@@ -3487,8 +3493,10 @@ func (s *Server) handleStartPaneStreamV1(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Stream manager targets use raw tmux-style "session:pane_idx".
-	target := fmt.Sprintf("%s:%d", sessionID, paneIdx)
+	target, ok := s.resolvePaneTargetForRequest(w, r, sessionID, paneIdx, reqID)
+	if !ok {
+		return
+	}
 	topic := streamTopicForTarget(target)
 
 	if err := s.streamManager.StartStream(target); err != nil {
@@ -3518,7 +3526,10 @@ func (s *Server) handleStopPaneStreamV1(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	target := fmt.Sprintf("%s:%d", sessionID, paneIdx)
+	target, ok := s.resolvePaneTargetForRequest(w, r, sessionID, paneIdx, reqID)
+	if !ok {
+		return
+	}
 	s.streamManager.StopStream(target)
 
 	writeSuccessResponse(w, http.StatusOK, map[string]interface{}{
@@ -5919,6 +5930,16 @@ func resolvePaneTargetByIndex(ctx context.Context, session string, paneIdx int) 
 		}
 	}
 	return "", fmt.Errorf("no pane with index %d in session %q", paneIdx, session)
+}
+
+func (s *Server) resolvePaneTargetForRequest(w http.ResponseWriter, r *http.Request, session string, paneIdx int, reqID string) (string, bool) {
+	target, err := resolvePaneTargetByIndex(r.Context(), session, paneIdx)
+	if err != nil {
+		writeErrorResponse(w, http.StatusNotFound, ErrCodeNotFound,
+			fmt.Sprintf("pane not found: %v", err), nil, reqID)
+		return "", false
+	}
+	return target, true
 }
 
 // parseCSVParam parses a comma-separated query parameter into a slice.

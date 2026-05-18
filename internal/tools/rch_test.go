@@ -108,6 +108,93 @@ func TestRCHStatusStruct(t *testing.T) {
 	}
 }
 
+func TestParseRCHStatusWrappedDaemonSchema(t *testing.T) {
+	status, err := parseRCHStatusJSON([]byte(`{
+		"success": true,
+		"data": {
+			"daemon": {
+				"daemon": {"workers_total": 2, "workers_healthy": 1},
+				"workers": [
+					{"id": "worker-a", "host": "10.0.0.1", "status": "healthy", "used_slots": 1, "total_slots": 2},
+					{"id": "worker-b", "host": "10.0.0.2", "status": "unreachable", "used_slots": 0, "total_slots": 4}
+				],
+				"active_builds": [
+					{"worker_id": "worker-a", "command": "go test ./..."}
+				],
+				"stats": {"total_builds": 10, "remote_count": 8, "local_count": 2},
+				"saved_time": {"time_saved_ms": 61500}
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("parseRCHStatusJSON returned error: %v", err)
+	}
+
+	if !status.Enabled {
+		t.Fatal("expected wrapped status to be enabled")
+	}
+	if status.WorkerCount != 2 {
+		t.Fatalf("expected WorkerCount 2, got %d", status.WorkerCount)
+	}
+	if status.HealthyCount != 1 {
+		t.Fatalf("expected HealthyCount 1, got %d", status.HealthyCount)
+	}
+	if len(status.Workers) != 2 {
+		t.Fatalf("expected 2 workers, got %d", len(status.Workers))
+	}
+
+	workerA := status.Workers[0]
+	if workerA.Name != "worker-a" || workerA.Host != "10.0.0.1" {
+		t.Fatalf("unexpected first worker identity: %+v", workerA)
+	}
+	if !workerA.Available || !workerA.Healthy {
+		t.Fatalf("expected worker-a to be available and healthy: %+v", workerA)
+	}
+	if workerA.Load != 50 {
+		t.Fatalf("expected worker-a load 50, got %d", workerA.Load)
+	}
+	if workerA.CurrentBuild != "go test ./..." {
+		t.Fatalf("expected current build command, got %q", workerA.CurrentBuild)
+	}
+
+	workerB := status.Workers[1]
+	if workerB.Available || workerB.Healthy {
+		t.Fatalf("expected worker-b to be unavailable and unhealthy: %+v", workerB)
+	}
+
+	if status.SessionStats == nil {
+		t.Fatal("expected session stats")
+	}
+	if status.SessionStats.BuildsTotal != 10 || status.SessionStats.BuildsRemote != 8 || status.SessionStats.BuildsLocal != 2 {
+		t.Fatalf("unexpected session stats: %+v", status.SessionStats)
+	}
+	if status.SessionStats.TimeSavedSeconds != 62 {
+		t.Fatalf("expected rounded time saved 62 seconds, got %d", status.SessionStats.TimeSavedSeconds)
+	}
+}
+
+func TestParseRCHStatusFlatSchemaFillsDerivedCounts(t *testing.T) {
+	status, err := parseRCHStatusJSON([]byte(`{
+		"workers": [
+			{"name": "worker-a", "available": true, "healthy": true},
+			{"name": "worker-b", "available": false, "healthy": false}
+		]
+	}`))
+	if err != nil {
+		t.Fatalf("parseRCHStatusJSON returned error: %v", err)
+	}
+
+	if !status.Enabled {
+		t.Fatal("expected flat status with workers to be enabled")
+	}
+	if status.WorkerCount != 2 {
+		t.Fatalf("expected WorkerCount 2, got %d", status.WorkerCount)
+	}
+	if status.HealthyCount != 1 {
+		t.Fatalf("expected HealthyCount 1, got %d", status.HealthyCount)
+	}
+}
+
 func TestRCHAvailabilityStruct(t *testing.T) {
 	availability := RCHAvailability{
 		Available:    true,

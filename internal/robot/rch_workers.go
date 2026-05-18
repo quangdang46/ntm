@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Dicklesworthstone/ntm/internal/tools"
@@ -152,7 +153,7 @@ func rchWorkerStatus(worker tools.RCHWorker) string {
 	if !worker.Healthy {
 		return "unhealthy"
 	}
-	if worker.Queue > 0 || worker.Load >= 80 {
+	if strings.TrimSpace(worker.CurrentBuild) != "" || worker.Queue > 0 || worker.Load >= 80 {
 		return "busy"
 	}
 	return "healthy"

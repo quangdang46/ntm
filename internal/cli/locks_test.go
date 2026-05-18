@@ -122,6 +122,13 @@ func TestLocksCheckPathMatches_ExactAndPrefixAndGlobs(t *testing.T) {
 		// Bare ** is the broad catch-all used by reservation tooling.
 		{"bare_recursive_glob", "internal/cli/locks.go", "**", true},
 		{"bare_recursive_glob_absolute", "/data/projects/foo/internal/cli/locks.go", "**", true},
+		// Project root reservations normalize to "." and cover every
+		// project-relative path, but not unrelated absolute paths.
+		{"project_root_dot_matches_relative_child", "internal/cli/locks.go", ".", true},
+		{"project_root_dot_matches_root", ".", ".", true},
+		{"project_root_dot_does_not_match_outside_absolute", "/tmp/ntm/internal/cli/locks.go", ".", false},
+		{"project_root_dot_does_not_match_parent_escape", "../other/repo/file.go", ".", false},
+		{"project_root_dot_does_not_match_cleaned_parent_escape", "internal/../../other/repo/file.go", ".", false},
 		// Suffix recursive glob
 		{"suffix_recursive", "src/auth/handler.rs", "**/handler.rs", true},
 		{"suffix_recursive_middle", "internal/cli/locks.go", "internal/**/*.go", true},
@@ -198,12 +205,36 @@ func TestLocksComparableReservationPath_ProjectRelativeMatching(t *testing.T) {
 			wantPattern: "internal/cli/*.go",
 		},
 		{
+			name:        "absolute_project_root_pattern_blocks_project_child",
+			path:        "/data/projects/ntm/internal/cli/locks.go",
+			pattern:     "/data/projects/ntm",
+			wantMatch:   true,
+			wantPath:    "internal/cli/locks.go",
+			wantPattern: ".",
+		},
+		{
+			name:        "absolute_project_root_pattern_blocks_project_root",
+			path:        "/data/projects/ntm",
+			pattern:     "/data/projects/ntm",
+			wantMatch:   true,
+			wantPath:    ".",
+			wantPattern: ".",
+		},
+		{
 			name:        "absolute_query_outside_project_stays_absolute",
 			path:        "/tmp/ntm/internal/cli/locks.go",
 			pattern:     "internal/**",
 			wantMatch:   false,
 			wantPath:    "/tmp/ntm/internal/cli/locks.go",
 			wantPattern: "internal/**",
+		},
+		{
+			name:        "project_root_pattern_does_not_block_outside_absolute_query",
+			path:        "/tmp/ntm/internal/cli/locks.go",
+			pattern:     "/data/projects/ntm",
+			wantMatch:   false,
+			wantPath:    "/tmp/ntm/internal/cli/locks.go",
+			wantPattern: ".",
 		},
 	}
 	for _, tc := range cases {

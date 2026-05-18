@@ -166,6 +166,56 @@ type RCHSessionStats struct {
 	TimeSavedSeconds int `json:"time_saved_seconds"`
 }
 
+type rchStatusEnvelope struct {
+	Success bool          `json:"success"`
+	Data    rchStatusData `json:"data"`
+}
+
+type rchStatusData struct {
+	Daemon rchDaemonStatus `json:"daemon"`
+}
+
+type rchDaemonStatus struct {
+	Summary      rchDaemonSummary    `json:"daemon"`
+	Workers      []rchDaemonWorker   `json:"workers"`
+	ActiveBuilds []rchDaemonBuild    `json:"active_builds"`
+	Stats        *rchDaemonStats     `json:"stats"`
+	SavedTime    *rchDaemonSavedTime `json:"saved_time"`
+}
+
+type rchDaemonSummary struct {
+	WorkersTotal   int `json:"workers_total"`
+	WorkersHealthy int `json:"workers_healthy"`
+}
+
+type rchDaemonWorker struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Host            string `json:"host"`
+	Status          string `json:"status"`
+	UsedSlots       int    `json:"used_slots"`
+	TotalSlots      int    `json:"total_slots"`
+	LastSeen        string `json:"last_seen"`
+	CurrentBuild    string `json:"current_build"`
+	BuildsCompleted int    `json:"builds_completed"`
+	CPUPercent      int    `json:"cpu_percent"`
+}
+
+type rchDaemonBuild struct {
+	WorkerID string `json:"worker_id"`
+	Command  string `json:"command"`
+}
+
+type rchDaemonStats struct {
+	TotalBuilds int `json:"total_builds"`
+	RemoteCount int `json:"remote_count"`
+	LocalCount  int `json:"local_count"`
+}
+
+type rchDaemonSavedTime struct {
+	TimeSavedMS int64 `json:"time_saved_ms"`
+}
+
 // RCHAvailability represents the availability and compatibility of rch on PATH.
 type RCHAvailability struct {
 	Available    bool      `json:"available"`
@@ -309,21 +359,168 @@ func (a *RCHAdapter) GetStatus(ctx context.Context) (*RCHStatus, error) {
 		return &RCHStatus{Enabled: true, WorkerCount: 0, HealthyCount: 0}, nil
 	}
 
-	var status RCHStatus
-	if err := json.Unmarshal(output, &status); err != nil {
+	status, err := parseRCHStatusJSON(output)
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse rch status: %w", err)
 	}
 
-	// Count healthy workers if not already set
+	return status, nil
+}
+
+func parseRCHStatusJSON(output []byte) (*RCHStatus, error) {
+	var envelope rchStatusEnvelope
+	if err := json.Unmarshal(output, &envelope); err != nil {
+		return nil, err
+	}
+	if envelope.Success || envelope.Data.Daemon.hasData() {
+		return envelope.Data.Daemon.toStatus(envelope.Success), nil
+	}
+
+	var status RCHStatus
+	if err := json.Unmarshal(output, &status); err != nil {
+		return nil, err
+	}
+	normalizeRCHStatus(&status)
+	return &status, nil
+}
+
+func (s rchDaemonStatus) hasData() bool {
+	return s.Summary.WorkersTotal > 0 ||
+		s.Summary.WorkersHealthy > 0 ||
+		len(s.Workers) > 0 ||
+		len(s.ActiveBuilds) > 0 ||
+		s.Stats != nil ||
+		s.SavedTime != nil
+}
+
+func (s rchDaemonStatus) toStatus(success bool) *RCHStatus {
+	currentBuilds := make(map[string]string, len(s.ActiveBuilds))
+	for _, build := range s.ActiveBuilds {
+		workerID := strings.TrimSpace(build.WorkerID)
+		if workerID == "" {
+			continue
+		}
+		command := strings.TrimSpace(build.Command)
+		if command == "" {
+			command = "build in progress"
+		}
+		if existing := currentBuilds[workerID]; existing != "" {
+			currentBuilds[workerID] = existing + "; " + command
+			continue
+		}
+		currentBuilds[workerID] = command
+	}
+
+	workers := make([]RCHWorker, 0, len(s.Workers))
+	for _, worker := range s.Workers {
+		workers = append(workers, worker.toRCHWorker(currentBuilds))
+	}
+
+	status := &RCHStatus{
+		Enabled:      success || s.hasData(),
+		WorkerCount:  s.Summary.WorkersTotal,
+		HealthyCount: s.Summary.WorkersHealthy,
+		Workers:      workers,
+	}
+	if s.Stats != nil || s.SavedTime != nil {
+		status.SessionStats = &RCHSessionStats{}
+		if s.Stats != nil {
+			status.SessionStats.BuildsTotal = s.Stats.TotalBuilds
+			status.SessionStats.BuildsRemote = s.Stats.RemoteCount
+			status.SessionStats.BuildsLocal = s.Stats.LocalCount
+		}
+		if s.SavedTime != nil {
+			status.SessionStats.TimeSavedSeconds = millisecondsToSeconds(s.SavedTime.TimeSavedMS)
+		}
+	}
+	normalizeRCHStatus(status)
+	return status
+}
+
+func (w rchDaemonWorker) toRCHWorker(currentBuilds map[string]string) RCHWorker {
+	name := strings.TrimSpace(w.ID)
+	if name == "" {
+		name = strings.TrimSpace(w.Name)
+	}
+
+	status := strings.ToLower(strings.TrimSpace(w.Status))
+	currentBuild := strings.TrimSpace(w.CurrentBuild)
+	if currentBuild == "" {
+		currentBuild = strings.TrimSpace(currentBuilds[name])
+	}
+	if currentBuild == "" && w.UsedSlots > 0 {
+		currentBuild = "build in progress"
+	}
+
+	return RCHWorker{
+		Name:            name,
+		Host:            w.Host,
+		Available:       rchDaemonWorkerAvailable(status),
+		Healthy:         rchDaemonWorkerHealthy(status),
+		Load:            rchSlotLoadPercent(w.UsedSlots, w.TotalSlots),
+		LastSeen:        w.LastSeen,
+		CurrentBuild:    currentBuild,
+		BuildsCompleted: w.BuildsCompleted,
+		CPUPercent:      w.CPUPercent,
+	}
+}
+
+func normalizeRCHStatus(status *RCHStatus) {
+	if status == nil {
+		return
+	}
+	if status.WorkerCount == 0 && len(status.Workers) > 0 {
+		status.WorkerCount = len(status.Workers)
+	}
 	if status.HealthyCount == 0 && len(status.Workers) > 0 {
-		for _, w := range status.Workers {
-			if w.Healthy && w.Available {
+		for _, worker := range status.Workers {
+			if worker.Healthy && worker.Available {
 				status.HealthyCount++
 			}
 		}
 	}
+	if !status.Enabled && (status.WorkerCount > 0 || status.HealthyCount > 0 || len(status.Workers) > 0 || status.SessionStats != nil) {
+		status.Enabled = true
+	}
+}
 
-	return &status, nil
+func rchDaemonWorkerAvailable(status string) bool {
+	switch status {
+	case "healthy", "available", "online", "busy", "degraded":
+		return true
+	default:
+		return false
+	}
+}
+
+func rchDaemonWorkerHealthy(status string) bool {
+	switch status {
+	case "healthy", "available", "online", "busy":
+		return true
+	default:
+		return false
+	}
+}
+
+func rchSlotLoadPercent(usedSlots, totalSlots int) int {
+	if usedSlots <= 0 || totalSlots <= 0 {
+		return 0
+	}
+	percent := (usedSlots*100 + totalSlots/2) / totalSlots
+	if percent < 0 {
+		return 0
+	}
+	if percent > 100 {
+		return 100
+	}
+	return percent
+}
+
+func millisecondsToSeconds(milliseconds int64) int {
+	if milliseconds <= 0 {
+		return 0
+	}
+	return int((milliseconds + 500) / 1000)
 }
 
 // GetWorkers returns the list of configured workers
